@@ -3,6 +3,7 @@
  */
 
 import { api } from "../../scripts/api.js";
+import { openPreviewModal } from "./vf_file_explorer_ui.js";
 import {
   createElement,
   createEmptyMessageEl,
@@ -245,6 +246,9 @@ export class VFFileBrowserModal {
     const isSupported = isSupportedMediaFile(file);
     if (this.deleteBtn) {
       this.deleteBtn.style.display = isSupported ? "inline-block" : "none";
+    }
+    if (this.previewBtn) {
+      this.previewBtn.style.display = isSupported ? "inline-block" : "none";
     }
     if (file) {
       this.selectedLabel.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
@@ -674,7 +678,25 @@ export class VFFileBrowserModal {
       }
     };
 
+    this.previewBtn = createElement("button", "", "Preview");
+    Object.assign(this.previewBtn.style, {
+      background: "#2a2a36",
+      color: "#ccc",
+      border: "1px solid #444",
+      borderRadius: "4px",
+      padding: "6px 12px",
+      cursor: "pointer",
+      fontSize: "12px",
+      display: "none",
+    });
+    this.previewBtn.onclick = () => {
+      if (this.selectedFile && isSupportedMediaFile(this.selectedFile)) {
+        openPreviewModal(this.selectedFile);
+      }
+    };
+
     actions.appendChild(explorerBtn);
+    actions.appendChild(this.previewBtn);
     actions.appendChild(this.deleteBtn);
     actions.appendChild(selectBtn);
 

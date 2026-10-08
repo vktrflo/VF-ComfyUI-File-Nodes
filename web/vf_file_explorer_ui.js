@@ -1048,7 +1048,12 @@ class EmbeddedFileExplorer {
   }
 
   openPreviewModal(file) {
-    let cleanupListeners = null;
+    return openPreviewModal(file);
+  }
+}
+
+export function openPreviewModal(file) {
+  let cleanupListeners = null;
     const { backdrop, close } = makeModalBackdrop({
       zIndex: 10100,
       onClose: () => cleanupListeners?.(),
@@ -1074,8 +1079,40 @@ class EmbeddedFileExplorer {
       display: "flex",
       justifyContent: "space-between",
       alignItems: "center",
+      gap: "12px",
     });
-    header.innerHTML = `<span style="font-size: 13px; font-weight: 600;">${file.name}</span>`;
+
+    const titleGroup = createElement("div");
+    Object.assign(titleGroup.style, {
+      display: "flex",
+      flexDirection: "column",
+      gap: "4px",
+      minWidth: "0",
+      flex: "1",
+    });
+
+    const titleEl = createElement("div", "", file.name);
+    Object.assign(titleEl.style, {
+      fontSize: "13px",
+      fontWeight: "600",
+      color: "#eee",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+    titleGroup.appendChild(titleEl);
+
+    const metaRow = createElement("div", "vf-modal-meta-row");
+    Object.assign(metaRow.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      fontSize: "11px",
+      color: "#aaa",
+      flexWrap: "wrap",
+      lineHeight: "1.2",
+    });
+    titleGroup.appendChild(metaRow);
 
     const closeBtn = createElement("button", "", "✕");
     Object.assign(closeBtn.style, {
@@ -1084,13 +1121,83 @@ class EmbeddedFileExplorer {
       color: "#aaa",
       fontSize: "16px",
       cursor: "pointer",
+      padding: "4px 8px",
+      flexShrink: "0",
     });
     closeBtn.onclick = () => {
       cleanupListeners?.();
       close();
     };
+    header.appendChild(titleGroup);
     header.appendChild(closeBtn);
     content.appendChild(header);
+
+    let currentDimensions = file.dimensions && Array.isArray(file.dimensions) ? file.dimensions : null;
+    let currentDuration = file.duration && file.duration > 0 ? file.duration : null;
+
+    const renderMeta = () => {
+      metaRow.innerHTML = "";
+      const isSupported = isSupportedMediaFile(file);
+      if (!isSupported) return;
+
+      // 1. Dimensions badge (e.g. 1920×1080)
+      if (currentDimensions && currentDimensions.length === 2 && currentDimensions[0] > 0) {
+        const dimBadge = createElement("span", "vf-badge-dimensions", `${currentDimensions[0]}×${currentDimensions[1]}`);
+        Object.assign(dimBadge.style, {
+          background: "rgba(255, 255, 255, 0.08)",
+          border: "1px solid rgba(255, 255, 255, 0.15)",
+          borderRadius: "3px",
+          padding: "1px 6px",
+          fontSize: "10px",
+          fontFamily: "monospace",
+          fontWeight: "500",
+          color: "#ddd",
+        });
+        metaRow.appendChild(dimBadge);
+      }
+
+      // 2. Duration badge (e.g. 0:05)
+      if (currentDuration != null && currentDuration > 0) {
+        const durBadge = createElement("span", "vf-badge-duration", formatDuration(currentDuration));
+        Object.assign(durBadge.style, {
+          background: "rgba(255, 255, 255, 0.08)",
+          border: "1px solid rgba(255, 255, 255, 0.15)",
+          borderRadius: "3px",
+          padding: "1px 6px",
+          fontSize: "10px",
+          fontFamily: "monospace",
+          fontWeight: "600",
+          color: "#ddd",
+        });
+        metaRow.appendChild(durBadge);
+      }
+
+      // 3. Creation date/time
+      const timeVal = file.ctime || file.mtime;
+      if (timeVal) {
+        const timeSpan = createElement("span", "vf-modal-meta-time", formatDateTime(timeVal));
+        Object.assign(timeSpan.style, {
+          color: "#999",
+          fontSize: "11px",
+        });
+        metaRow.appendChild(timeSpan);
+      }
+
+      // 4. File size
+      if (file.size != null && file.size > 0) {
+        const sizeStr = file.size > 1024 * 1024
+          ? `${(file.size / (1024 * 1024)).toFixed(2)} MB`
+          : `${(file.size / 1024).toFixed(1)} KB`;
+        const sizeSpan = createElement("span", "vf-modal-meta-size", `•  ${sizeStr}`);
+        Object.assign(sizeSpan.style, {
+          color: "#888",
+          fontSize: "11px",
+        });
+        metaRow.appendChild(sizeSpan);
+      }
+    };
+
+    renderMeta();
 
     ensureSpinnerStyles();
     const body = createElement("div");
@@ -1154,6 +1261,12 @@ class EmbeddedFileExplorer {
       img.onload = () => {
         spinner.remove();
         imageContainer.style.opacity = "1";
+        if (img.naturalWidth && img.naturalHeight) {
+          if (!currentDimensions || currentDimensions[0] !== img.naturalWidth || currentDimensions[1] !== img.naturalHeight) {
+            currentDimensions = [img.naturalWidth, img.naturalHeight];
+            renderMeta();
+          }
+        }
       };
       img.onerror = () => {
         spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load image preview</span>`;
@@ -1302,6 +1415,20 @@ class EmbeddedFileExplorer {
       video.onloadeddata = () => {
         spinner.remove();
         video.style.opacity = "1";
+        let changed = false;
+        if (video.videoWidth && video.videoHeight) {
+          if (!currentDimensions || currentDimensions[0] !== video.videoWidth || currentDimensions[1] !== video.videoHeight) {
+            currentDimensions = [video.videoWidth, video.videoHeight];
+            changed = true;
+          }
+        }
+        if (video.duration && !isNaN(video.duration) && video.duration > 0) {
+          if (!currentDuration || Math.abs(currentDuration - video.duration) > 0.5) {
+            currentDuration = video.duration;
+            changed = true;
+          }
+        }
+        if (changed) renderMeta();
       };
       video.onerror = () => {
         spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load video preview</span>`;
@@ -1317,6 +1444,12 @@ class EmbeddedFileExplorer {
       audio.onloadeddata = () => {
         spinner.remove();
         audio.style.opacity = "1";
+        if (audio.duration && !isNaN(audio.duration) && audio.duration > 0) {
+          if (!currentDuration || Math.abs(currentDuration - audio.duration) > 0.5) {
+            currentDuration = audio.duration;
+            renderMeta();
+          }
+        }
       };
       audio.onerror = () => {
         spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load audio preview</span>`;
@@ -1345,6 +1478,10 @@ class EmbeddedFileExplorer {
           spinner.remove();
           pre.textContent = t.slice(0, 50000);
           pre.style.opacity = "1";
+          const lines = t.split("\n").length;
+          const lineSpan = createElement("span", "vf-modal-meta-lines", `•  ${lines} lines`);
+          Object.assign(lineSpan.style, { color: "#888", fontSize: "11px" });
+          metaRow.appendChild(lineSpan);
         })
         .catch(() => {
           spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load text preview</span>`;
@@ -1356,4 +1493,4 @@ class EmbeddedFileExplorer {
     backdrop.appendChild(content);
     document.body.appendChild(backdrop);
   }
-}
+
