@@ -1,19 +1,40 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "vf-comfyui-file-nodes"
 version = "1.0.0"
 description = "High performance file loading, browsing, and media nodes for ComfyUI"
 readme = "README.md"
 requires-python = ">=3.10"
+license = { file = "LICENSE" }
 dependencies = [
     "torch",
     "numpy",
     "Pillow",
     "av>=10.0.0",
+    "aiohttp",
+]
+classifiers = [
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
 ]
 
-[project.urls]
-Homepage = "https://github.com/vktrflo/VF-ComfyUI-File-Nodes"
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "pytest-aiohttp", "aiohttp"]
 
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+[project.urls]
+Repository = "https://github.com/vktrflo/VF-ComfyUI-File-Nodes"
+
+[tool.setuptools]
+packages = ["vf_file_nodes"]
+
+[tool.comfy]
+PublisherId = "vktrflo"
+DisplayName = "VF ComfyUI File Nodes"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
