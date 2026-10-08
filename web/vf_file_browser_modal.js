@@ -13,6 +13,11 @@ export class VFFileBrowserModal {
     this.currentPath = options.initialPath || targetWidget?.value || "";
     this.onSelect = options.onSelect || null;
     this.sortBy = "name_asc";
+    let savedThumbs = true;
+    try {
+      savedThumbs = localStorage.getItem("vf_file_nodes_show_thumbnails") !== "false";
+    } catch (e) {}
+    this.showThumbnails = savedThumbs;
 
     this.favorites = [];
     this.drives = [];
@@ -233,6 +238,14 @@ export class VFFileBrowserModal {
     }
   }
 
+  updateThumbToggleBtn() {
+    if (!this.thumbToggleBtn) return;
+    this.thumbToggleBtn.style.background = this.showThumbnails ? "#0066cc" : "#262632";
+    this.thumbToggleBtn.style.color = this.showThumbnails ? "#fff" : "#888";
+    this.thumbToggleBtn.style.borderColor = this.showThumbnails ? "#0077ee" : "#3c3c4c";
+    this.thumbToggleBtn.title = this.showThumbnails ? "Thumbnails: ON (click to hide)" : "Thumbnails: OFF (click to show)";
+  }
+
   async loadDirectory(dirPath) {
     this.currentPath = dirPath;
     this.pathInput.value = dirPath;
@@ -449,11 +462,33 @@ export class VFFileBrowserModal {
       this.renderFiles();
     };
 
+    this.thumbToggleBtn = createElement("button", "", "🖼️");
+    Object.assign(this.thumbToggleBtn.style, {
+      background: this.showThumbnails ? "#0066cc" : "#262632",
+      color: this.showThumbnails ? "#fff" : "#888",
+      border: `1px solid ${this.showThumbnails ? "#0077ee" : "#3c3c4c"}`,
+      borderRadius: "4px",
+      padding: "5px 8px",
+      fontSize: "13px",
+      lineHeight: "1.2",
+      cursor: "pointer",
+    });
+    this.updateThumbToggleBtn();
+    this.thumbToggleBtn.onclick = () => {
+      this.showThumbnails = !this.showThumbnails;
+      try {
+        localStorage.setItem("vf_file_nodes_show_thumbnails", this.showThumbnails ? "true" : "false");
+      } catch (e) {}
+      this.updateThumbToggleBtn();
+      this.renderFiles();
+    };
+
     navBar.appendChild(this.driveSelect);
     navBar.appendChild(upBtn);
     navBar.appendChild(this.favBtn);
     navBar.appendChild(this.pathInput);
     navBar.appendChild(this.sortSelect);
+    navBar.appendChild(this.thumbToggleBtn);
     navBar.appendChild(searchInput);
     dialog.appendChild(navBar);
 
@@ -595,6 +630,7 @@ export class VFFileBrowserModal {
 
   renderFiles() {
     this.fileListEl.innerHTML = "";
+    this.fileListEl.style.gridAutoRows = this.showThumbnails ? "140px" : "100px";
 
     // Folders first
     this.dirs.forEach((dirName) => {
@@ -646,7 +682,7 @@ export class VFFileBrowserModal {
       const previewContainer = createElement("div");
       Object.assign(previewContainer.style, {
         width: "100%",
-        height: "85px",
+        height: this.showThumbnails ? "85px" : "55px",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -655,7 +691,7 @@ export class VFFileBrowserModal {
         background: "#16161c",
       });
 
-      if (file.media_type === "image" || file.media_type === "video") {
+      if (this.showThumbnails && (file.media_type === "image" || file.media_type === "video")) {
         const img = document.createElement("img");
         img.src = `/api/vf-file-nodes/thumbnail?path=${encodeURIComponent(file.path)}`;
         Object.assign(img.style, {
@@ -667,6 +703,10 @@ export class VFFileBrowserModal {
           previewContainer.innerHTML = `<span style="font-size: 24px;">${file.media_type === "image" ? "🖼️" : "🎬"}</span>`;
         };
         previewContainer.appendChild(img);
+      } else if (file.media_type === "image") {
+        previewContainer.innerHTML = '<span style="font-size: 26px;">🖼️</span>';
+      } else if (file.media_type === "video") {
+        previewContainer.innerHTML = '<span style="font-size: 26px;">🎬</span>';
       } else if (file.media_type === "audio") {
         previewContainer.innerHTML = '<span style="font-size: 28px;">🎵</span>';
       } else {

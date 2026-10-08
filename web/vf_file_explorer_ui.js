@@ -83,6 +83,20 @@ class EmbeddedFileExplorer {
     this.dirs = [];
     this.files = [];
     this.selectedFile = null;
+
+    let savedThumbs = true;
+    try {
+      savedThumbs = localStorage.getItem("vf_file_nodes_show_thumbnails") !== "false";
+    } catch (e) {}
+    this.showThumbnails = savedThumbs;
+  }
+
+  updateThumbToggleBtn() {
+    if (!this.thumbToggleBtn) return;
+    this.thumbToggleBtn.style.background = this.showThumbnails ? "#0066cc" : "#282834";
+    this.thumbToggleBtn.style.color = this.showThumbnails ? "#fff" : "#888";
+    this.thumbToggleBtn.style.borderColor = this.showThumbnails ? "#0077ee" : "#3c3c4c";
+    this.thumbToggleBtn.title = this.showThumbnails ? "Thumbnails: ON (click to hide)" : "Thumbnails: OFF (click to show)";
   }
 
   async init() {
@@ -482,7 +496,29 @@ class EmbeddedFileExplorer {
       this.renderGrid();
     };
 
+    this.thumbToggleBtn = createElement("button", "", "🖼️");
+    Object.assign(this.thumbToggleBtn.style, {
+      background: this.showThumbnails ? "#0066cc" : "#282834",
+      color: this.showThumbnails ? "#fff" : "#888",
+      border: `1px solid ${this.showThumbnails ? "#0077ee" : "#3c3c4c"}`,
+      borderRadius: "3px",
+      padding: "3px 6px",
+      fontSize: "12px",
+      lineHeight: "1.2",
+      cursor: "pointer",
+    });
+    this.updateThumbToggleBtn();
+    this.thumbToggleBtn.onclick = () => {
+      this.showThumbnails = !this.showThumbnails;
+      try {
+        localStorage.setItem("vf_file_nodes_show_thumbnails", this.showThumbnails ? "true" : "false");
+      } catch (e) {}
+      this.updateThumbToggleBtn();
+      this.renderGrid();
+    };
+
     rightControls.appendChild(this.sortSelect);
+    rightControls.appendChild(this.thumbToggleBtn);
     rightControls.appendChild(searchInput);
 
     filterBar.appendChild(tabsContainer);
@@ -608,6 +644,7 @@ class EmbeddedFileExplorer {
 
   renderGrid() {
     this.fileGridEl.innerHTML = "";
+    this.fileGridEl.style.gridAutoRows = this.showThumbnails ? "120px" : "85px";
 
     // Folders
     this.dirs.forEach((dirName) => {
@@ -661,7 +698,7 @@ class EmbeddedFileExplorer {
       const thumb = createElement("div");
       Object.assign(thumb.style, {
         width: "100%",
-        height: "70px",
+        height: this.showThumbnails ? "70px" : "45px",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -670,7 +707,7 @@ class EmbeddedFileExplorer {
         overflow: "hidden",
       });
 
-      if (file.media_type === "image" || file.media_type === "video") {
+      if (this.showThumbnails && (file.media_type === "image" || file.media_type === "video")) {
         const img = document.createElement("img");
         img.src = `/api/vf-file-nodes/thumbnail?path=${encodeURIComponent(file.path)}`;
         Object.assign(img.style, { width: "100%", height: "100%", objectFit: "cover" });
@@ -678,6 +715,10 @@ class EmbeddedFileExplorer {
           thumb.innerHTML = `<span style="font-size: 22px;">${file.media_type === "image" ? "🖼️" : "🎬"}</span>`;
         };
         thumb.appendChild(img);
+      } else if (file.media_type === "image") {
+        thumb.innerHTML = '<span style="font-size: 22px;">🖼️</span>';
+      } else if (file.media_type === "video") {
+        thumb.innerHTML = '<span style="font-size: 22px;">🎬</span>';
       } else if (file.media_type === "audio") {
         thumb.innerHTML = '<span style="font-size: 24px;">🎵</span>';
       } else {
