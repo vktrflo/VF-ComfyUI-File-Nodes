@@ -54,6 +54,7 @@ export class VFFileBrowserModal {
   }
 
   dispose() {
+    this._resizeObserver?.disconnect();
     this.closeModal?.();
   }
 
@@ -549,14 +550,33 @@ export class VFFileBrowserModal {
     Object.assign(this.fileListEl.style, {
       flex: "1",
       overflowY: "auto",
+      overflowX: "hidden",
       padding: "12px 16px",
       display: "grid",
       gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))",
       gridAutoRows: "140px",
       gap: "10px",
       background: "#16161c",
+      boxSizing: "border-box",
     });
     dialog.appendChild(this.fileListEl);
+
+    if (typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver((entries) => {
+        if (this.layoutMode !== "mosaic") return;
+        for (const entry of entries) {
+          const w = entry.contentRect.width;
+          if (!w) continue;
+          const minColWidth = 140;
+          const gap = 10;
+          const newCols = Math.max(1, Math.floor((w + gap) / (minColWidth + gap)));
+          if (this._currentCols && this._currentCols !== newCols) {
+            this.renderFiles();
+          }
+        }
+      });
+      this._resizeObserver.observe(this.fileListEl);
+    }
 
     // Footer
     const footer = createElement("div");
@@ -672,19 +692,59 @@ export class VFFileBrowserModal {
     this.fileListEl.innerHTML = "";
     const isMosaic = this.layoutMode === "mosaic";
 
+    let cols = null;
+    let numCols = 1;
+    let itemIdx = 0;
+
     if (isMosaic) {
-      this.fileListEl.style.display = "block";
-      this.fileListEl.style.columnWidth = "140px";
-      this.fileListEl.style.columnGap = "10px";
+      const minColWidth = 140;
+      const gap = 10;
+      const availableWidth = this.fileListEl.clientWidth || 780;
+      numCols = Math.max(1, Math.floor((availableWidth + gap) / (minColWidth + gap)));
+      this._currentCols = numCols;
+
+      this.fileListEl.style.display = "flex";
+      this.fileListEl.style.flexDirection = "row";
+      this.fileListEl.style.alignItems = "flex-start";
+      this.fileListEl.style.gap = `${gap}px`;
+      this.fileListEl.style.overflowY = "auto";
+      this.fileListEl.style.overflowX = "hidden";
       this.fileListEl.style.gridTemplateColumns = "";
       this.fileListEl.style.gridAutoRows = "";
+
+      cols = [];
+      for (let i = 0; i < numCols; i++) {
+        const col = createElement("div", "vf-mosaic-col");
+        Object.assign(col.style, {
+          flex: "1",
+          minWidth: "0",
+          display: "flex",
+          flexDirection: "column",
+          gap: `${gap}px`,
+        });
+        this.fileListEl.appendChild(col);
+        cols.push(col);
+      }
     } else {
+      this._currentCols = null;
       this.fileListEl.style.display = "grid";
       this.fileListEl.style.gridTemplateColumns = "repeat(auto-fill, minmax(130px, 1fr))";
       this.fileListEl.style.gridAutoRows = this.showThumbnails ? "140px" : "100px";
-      this.fileListEl.style.columnWidth = "";
-      this.fileListEl.style.columnGap = "";
+      this.fileListEl.style.flexDirection = "";
+      this.fileListEl.style.alignItems = "";
+      this.fileListEl.style.gap = "10px";
+      this.fileListEl.style.overflowY = "auto";
+      this.fileListEl.style.overflowX = "hidden";
     }
+
+    const appendItem = (card) => {
+      if (isMosaic && cols) {
+        cols[itemIdx % numCols].appendChild(card);
+        itemIdx++;
+      } else {
+        this.fileListEl.appendChild(card);
+      }
+    };
 
     // Folders first
     this.dirs.forEach((dirName) => {
@@ -703,10 +763,9 @@ export class VFFileBrowserModal {
         textAlign: "center",
         gap: "6px",
         userSelect: "none",
-        breakInside: isMosaic ? "avoid" : "auto",
-        marginBottom: isMosaic ? "10px" : "0",
         boxSizing: "border-box",
-        width: isMosaic ? "100%" : "auto",
+        width: "100%",
+        minHeight: isMosaic ? "65px" : "",
       });
       card.innerHTML = `<div style="font-size: 28px;">📁</div>
         <div style="font-size: 11px; font-weight: 500; word-break: break-word; line-height: 1.2; max-height: 2.4em; overflow: hidden;">${dirName}</div>`;
@@ -716,7 +775,7 @@ export class VFFileBrowserModal {
         this.selectFile(null);
         this.loadDirectory(next);
       };
-      this.fileListEl.appendChild(card);
+      appendItem(card);
     });
 
     // Files
@@ -736,10 +795,8 @@ export class VFFileBrowserModal {
         cursor: "pointer",
         position: "relative",
         userSelect: "none",
-        breakInside: isMosaic ? "avoid" : "auto",
-        marginBottom: isMosaic ? "10px" : "0",
         boxSizing: "border-box",
-        width: isMosaic ? "100%" : "auto",
+        width: "100%",
       });
 
       const previewContainer = createElement("div");
@@ -810,7 +867,7 @@ export class VFFileBrowserModal {
         this.commitSelection(file.path);
       };
 
-      this.fileListEl.appendChild(card);
+      appendItem(card);
     });
   }
 }

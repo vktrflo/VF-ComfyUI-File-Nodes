@@ -571,14 +571,33 @@ class EmbeddedFileExplorer {
     Object.assign(this.fileGridEl.style, {
       flex: "1",
       overflowY: "auto",
+      overflowX: "hidden",
       padding: "10px",
       display: "grid",
       gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
       gridAutoRows: "120px",
       gap: "8px",
       background: "#14141a",
+      boxSizing: "border-box",
     });
     this.container.appendChild(this.fileGridEl);
+
+    if (typeof ResizeObserver !== "undefined") {
+      this._resizeObserver = new ResizeObserver((entries) => {
+        if (this.layoutMode !== "mosaic") return;
+        for (const entry of entries) {
+          const w = entry.contentRect.width;
+          if (!w) continue;
+          const minColWidth = 120;
+          const gap = 8;
+          const newCols = Math.max(1, Math.floor((w + gap) / (minColWidth + gap)));
+          if (this._currentCols && this._currentCols !== newCols) {
+            this.renderGrid();
+          }
+        }
+      });
+      this._resizeObserver.observe(this.fileGridEl);
+    }
 
     // 4. Status / Action bar
     const statusBar = createElement("div");
@@ -687,19 +706,59 @@ class EmbeddedFileExplorer {
     this.fileGridEl.innerHTML = "";
     const isMosaic = this.layoutMode === "mosaic";
 
+    let cols = null;
+    let numCols = 1;
+    let itemIdx = 0;
+
     if (isMosaic) {
-      this.fileGridEl.style.display = "block";
-      this.fileGridEl.style.columnWidth = "120px";
-      this.fileGridEl.style.columnGap = "8px";
+      const minColWidth = 120;
+      const gap = 8;
+      const availableWidth = this.fileGridEl.clientWidth || (this.container.clientWidth ? this.container.clientWidth - 20 : DEFAULT_WIDTH);
+      numCols = Math.max(1, Math.floor((availableWidth + gap) / (minColWidth + gap)));
+      this._currentCols = numCols;
+
+      this.fileGridEl.style.display = "flex";
+      this.fileGridEl.style.flexDirection = "row";
+      this.fileGridEl.style.alignItems = "flex-start";
+      this.fileGridEl.style.gap = `${gap}px`;
+      this.fileGridEl.style.overflowY = "auto";
+      this.fileGridEl.style.overflowX = "hidden";
       this.fileGridEl.style.gridTemplateColumns = "";
       this.fileGridEl.style.gridAutoRows = "";
+
+      cols = [];
+      for (let i = 0; i < numCols; i++) {
+        const col = createElement("div", "vf-mosaic-col");
+        Object.assign(col.style, {
+          flex: "1",
+          minWidth: "0",
+          display: "flex",
+          flexDirection: "column",
+          gap: `${gap}px`,
+        });
+        this.fileGridEl.appendChild(col);
+        cols.push(col);
+      }
     } else {
+      this._currentCols = null;
       this.fileGridEl.style.display = "grid";
       this.fileGridEl.style.gridTemplateColumns = "repeat(auto-fill, minmax(110px, 1fr))";
       this.fileGridEl.style.gridAutoRows = this.showThumbnails ? "120px" : "85px";
-      this.fileGridEl.style.columnWidth = "";
-      this.fileGridEl.style.columnGap = "";
+      this.fileGridEl.style.flexDirection = "";
+      this.fileGridEl.style.alignItems = "";
+      this.fileGridEl.style.gap = "8px";
+      this.fileGridEl.style.overflowY = "auto";
+      this.fileGridEl.style.overflowX = "hidden";
     }
+
+    const appendItem = (card) => {
+      if (isMosaic && cols) {
+        cols[itemIdx % numCols].appendChild(card);
+        itemIdx++;
+      } else {
+        this.fileGridEl.appendChild(card);
+      }
+    };
 
     // Folders
     this.dirs.forEach((dirName) => {
@@ -717,10 +776,9 @@ class EmbeddedFileExplorer {
         cursor: "pointer",
         textAlign: "center",
         gap: "4px",
-        breakInside: isMosaic ? "avoid" : "auto",
-        marginBottom: isMosaic ? "8px" : "0",
         boxSizing: "border-box",
-        width: isMosaic ? "100%" : "auto",
+        width: "100%",
+        minHeight: isMosaic ? "60px" : "",
       });
       card.innerHTML = `<span style="font-size: 24px;">📁</span>
         <span style="font-size: 10px; font-weight: 500; word-break: break-word; line-height: 1.2; max-height: 2.4em; overflow: hidden;">${dirName}</span>`;
@@ -729,7 +787,7 @@ class EmbeddedFileExplorer {
         this.selectFile(null);
         this.loadDirectory(next);
       };
-      this.fileGridEl.appendChild(card);
+      appendItem(card);
     });
 
     // Files
@@ -749,10 +807,8 @@ class EmbeddedFileExplorer {
         gap: isMosaic ? "6px" : "0",
         cursor: "pointer",
         position: "relative",
-        breakInside: isMosaic ? "avoid" : "auto",
-        marginBottom: isMosaic ? "8px" : "0",
         boxSizing: "border-box",
-        width: isMosaic ? "100%" : "auto",
+        width: "100%",
       });
 
       card.ondragstart = (e) => {
@@ -825,7 +881,7 @@ class EmbeddedFileExplorer {
         this.openPreviewModal(file);
       };
 
-      this.fileGridEl.appendChild(card);
+      appendItem(card);
     });
   }
 
