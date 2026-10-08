@@ -739,7 +739,11 @@ class EmbeddedFileExplorer {
   }
 
   openPreviewModal(file) {
-    const { backdrop, close } = makeModalBackdrop({ zIndex: 10100 });
+    let cleanupListeners = null;
+    const { backdrop, close } = makeModalBackdrop({
+      zIndex: 10100,
+      onClose: () => cleanupListeners?.(),
+    });
     const content = createElement("div");
     Object.assign(content.style, {
       maxWidth: "90vw",
@@ -772,7 +776,10 @@ class EmbeddedFileExplorer {
       fontSize: "16px",
       cursor: "pointer",
     });
-    closeBtn.onclick = close;
+    closeBtn.onclick = () => {
+      cleanupListeners?.();
+      close();
+    };
     header.appendChild(closeBtn);
     content.appendChild(header);
 
@@ -784,15 +791,157 @@ class EmbeddedFileExplorer {
       justifyContent: "center",
       minWidth: "300px",
       minHeight: "200px",
+      position: "relative",
     });
 
     if (file.media_type === "image") {
+      const imageContainer = createElement("div", "vf-modal-image-container");
+      Object.assign(imageContainer.style, {
+        position: "relative",
+        overflow: "hidden",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        maxWidth: "85vw",
+        maxHeight: "75vh",
+        borderRadius: "4px",
+      });
+      imageContainer.title = "🔍 Use scroll wheel to zoom (up to 4x)";
+
       const img = document.createElement("img");
       img.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`;
-      img.style.maxWidth = "80vw";
-      img.style.maxHeight = "75vh";
-      img.style.objectFit = "contain";
-      body.appendChild(img);
+      Object.assign(img.style, {
+        maxWidth: "85vw",
+        maxHeight: "75vh",
+        objectFit: "contain",
+        transformOrigin: "center center",
+        transition: "transform 0.08s ease-out",
+        userSelect: "none",
+        pointerEvents: "none",
+      });
+      img.draggable = false;
+
+      const tooltip = createElement("div", "vf-modal-zoom-tooltip");
+      Object.assign(tooltip.style, {
+        position: "absolute",
+        bottom: "12px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        background: "rgba(18, 18, 26, 0.85)",
+        color: "#eee",
+        border: "1px solid rgba(255, 255, 255, 0.15)",
+        backdropFilter: "blur(6px)",
+        borderRadius: "20px",
+        padding: "5px 14px",
+        fontSize: "11px",
+        fontWeight: "500",
+        display: "flex",
+        alignItems: "center",
+        gap: "6px",
+        pointerEvents: "none",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.5)",
+        zIndex: "10",
+        whiteSpace: "nowrap",
+        userSelect: "none",
+      });
+
+      let zoom = 1.0;
+      const MAX_ZOOM = 4.0;
+      const MIN_ZOOM = 1.0;
+      let panX = 0;
+      let panY = 0;
+      let isDragging = false;
+      let startX = 0;
+      let startY = 0;
+
+      const updateTooltip = () => {
+        const zoomText = zoom > 1.0 ? ` (${zoom.toFixed(1)}x)` : "";
+        tooltip.innerHTML = `<span style="font-size: 13px;">🔍</span> <span>Use scroll wheel to zoom (up to 4x)${zoomText}</span>`;
+      };
+      updateTooltip();
+
+      const applyTransform = () => {
+        if (zoom <= 1.0) {
+          panX = 0;
+          panY = 0;
+          imageContainer.style.cursor = "default";
+        } else {
+          imageContainer.style.cursor = isDragging ? "grabbing" : "grab";
+        }
+        img.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+      };
+
+      imageContainer.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const prevZoom = zoom;
+        const delta = e.deltaY < 0 ? 0.25 : -0.25;
+        zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round((zoom + delta) * 100) / 100));
+
+        if (zoom <= 1.0) {
+          panX = 0;
+          panY = 0;
+        } else if (prevZoom !== zoom) {
+          const rect = imageContainer.getBoundingClientRect();
+          const mouseX = e.clientX - rect.left - rect.width / 2;
+          const mouseY = e.clientY - rect.top - rect.height / 2;
+          const factor = (zoom - prevZoom) / prevZoom;
+          panX -= (mouseX - panX) * factor;
+          panY -= (mouseY - panY) * factor;
+        }
+
+        applyTransform();
+        updateTooltip();
+      }, { passive: false });
+
+      imageContainer.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        if (zoom > 1.0) {
+          isDragging = true;
+          startX = e.clientX - panX;
+          startY = e.clientY - panY;
+          imageContainer.style.cursor = "grabbing";
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      });
+
+      const onMouseMove = (e) => {
+        if (!isDragging) return;
+        panX = e.clientX - startX;
+        panY = e.clientY - startY;
+        applyTransform();
+      };
+
+      const onMouseUp = () => {
+        if (isDragging) {
+          isDragging = false;
+          imageContainer.style.cursor = zoom > 1.0 ? "grab" : "default";
+        }
+      };
+
+      imageContainer.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        zoom = 1.0;
+        panX = 0;
+        panY = 0;
+        applyTransform();
+        updateTooltip();
+      });
+
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+
+      cleanupListeners = () => {
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
+      };
+
+      imageContainer.appendChild(img);
+      imageContainer.appendChild(tooltip);
+      body.appendChild(imageContainer);
     } else if (file.media_type === "video") {
       const video = document.createElement("video");
       video.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`;
