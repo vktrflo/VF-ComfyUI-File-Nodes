@@ -369,7 +369,11 @@ class EmbeddedFileExplorer {
   renderDrivePills() {
     this.driveRow.innerHTML = "";
     this.drives.forEach((d) => {
-      const pill = createElement("button", "", d.name);
+      const label = (d.name || "").includes(" ") ? d.name.split(" ")[0] : (d.name || d.path);
+      const pill = createElement("button", "", label);
+      if (d.remote_path || d.path) {
+        pill.title = d.remote_path ? `${label} (${d.remote_path})` : d.path;
+      }
       Object.assign(pill.style, {
         background: this.currentPath.toUpperCase().startsWith(d.path.toUpperCase()) ? "#0066cc" : "#2a2a38",
         color: "#eee",

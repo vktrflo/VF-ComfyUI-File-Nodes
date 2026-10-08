@@ -29,9 +29,10 @@ def _get_windows_drives() -> list[dict[str, str]]:
                     letter = f"{subkey_name}:"
                     drive_path = f"{letter}\\"
                     drives.append({
-                        "name": f"{letter} ({remote_path})",
+                        "name": letter,
                         "path": drive_path,
                         "type": "network",
+                        "remote_path": remote_path,
                     })
                     seen.add(letter.upper())
                 except Exception:

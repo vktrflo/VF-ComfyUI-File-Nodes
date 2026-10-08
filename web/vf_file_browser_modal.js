@@ -103,7 +103,11 @@ export class VFFileBrowserModal {
     this.drives.forEach((d) => {
       const opt = document.createElement("option");
       opt.value = d.path;
-      opt.textContent = `${d.name} [${d.type}]`;
+      const label = (d.name || "").includes(" ") ? d.name.split(" ")[0] : (d.name || d.path);
+      opt.textContent = `${label} [${d.type}]`;
+      if (d.remote_path) {
+        opt.title = d.remote_path;
+      }
       if (this.currentPath && this.currentPath.toUpperCase().startsWith(d.path.toUpperCase())) {
         opt.selected = true;
       }
