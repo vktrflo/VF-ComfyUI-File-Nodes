@@ -76,8 +76,10 @@ class EmbeddedFileExplorer {
     this.container = container;
     this.currentPath = pathWidget?.value || "";
     this.activeFilter = "all";
+    this.sortBy = "name_asc";
     this.searchQuery = "";
     this.drives = [];
+    this.favorites = [];
     this.dirs = [];
     this.files = [];
     this.selectedFile = null;
@@ -87,6 +89,7 @@ class EmbeddedFileExplorer {
     this.renderSkeleton();
     await this.initStartPath();
     await this.loadDrives();
+    await this.loadFavorites();
     await this.loadDirectory(this.currentPath);
   }
 
@@ -124,13 +127,148 @@ class EmbeddedFileExplorer {
     } catch (e) {}
   }
 
+  normPath(p) {
+    return (p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+
+  isCurrentFavorite() {
+    const cur = this.normPath(this.currentPath);
+    return this.favorites.some((f) => this.normPath(f.path) === cur);
+  }
+
+  async loadFavorites() {
+    try {
+      const resp = await api.fetchApi("/api/vf-file-nodes/favorites");
+      if (resp.ok) {
+        const data = await resp.json();
+        this.favorites = data.favorites || [];
+        this.renderFavoritesBar();
+        this.updateFavoriteButton();
+      }
+    } catch (e) {
+      console.error("[VF File Nodes] Favorites fetch error:", e);
+    }
+  }
+
+  updateFavoriteButton() {
+    if (!this.favBtn) return;
+    const isFav = this.isCurrentFavorite();
+    this.favBtn.innerHTML = isFav ? "★" : "☆";
+    this.favBtn.style.color = isFav ? "#f5c518" : "#888";
+    this.favBtn.title = isFav ? "Remove folder from favorites" : "Add current folder to favorites";
+  }
+
+  async toggleCurrentFavorite() {
+    if (!this.currentPath) return;
+    const isFav = this.isCurrentFavorite();
+    const endpoint = isFav ? "/api/vf-file-nodes/favorites/remove" : "/api/vf-file-nodes/favorites/add";
+    try {
+      const resp = await api.fetchApi(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: this.currentPath }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this.favorites = data.favorites || [];
+        this.renderFavoritesBar();
+        this.updateFavoriteButton();
+      }
+    } catch (e) {
+      console.error("[VF File Nodes] Toggle favorite error:", e);
+    }
+  }
+
+  async removeFavorite(pathToRemove) {
+    try {
+      const resp = await api.fetchApi("/api/vf-file-nodes/favorites/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: pathToRemove }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        this.favorites = data.favorites || [];
+        this.renderFavoritesBar();
+        this.updateFavoriteButton();
+      }
+    } catch (e) {
+      console.error("[VF File Nodes] Remove favorite error:", e);
+    }
+  }
+
+  renderFavoritesBar() {
+    if (!this.favoritesBar) return;
+    this.favoritesBar.innerHTML = "";
+    if (!this.favorites || this.favorites.length === 0) {
+      this.favoritesBar.style.display = "none";
+      return;
+    }
+    this.favoritesBar.style.display = "flex";
+
+    const label = createElement("span", "", "⭐");
+    label.style.fontSize = "11px";
+    label.style.alignSelf = "center";
+    label.style.opacity = "0.7";
+    label.title = "Favorite folders";
+    this.favoritesBar.appendChild(label);
+
+    const cur = this.normPath(this.currentPath);
+
+    this.favorites.forEach((fav) => {
+      const isSelected = this.normPath(fav.path) === cur;
+      const pill = createElement("div");
+      Object.assign(pill.style, {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "4px",
+        background: isSelected ? "#0066cc" : "#282838",
+        color: isSelected ? "#fff" : "#ddd",
+        border: "1px solid #3c3c4e",
+        borderRadius: "12px",
+        padding: "2px 8px",
+        fontSize: "11px",
+        cursor: "pointer",
+        whiteSpace: "nowrap",
+        flexShrink: "0",
+      });
+      pill.title = fav.path;
+
+      const nameSpan = createElement("span", "", fav.name || fav.path);
+      nameSpan.onclick = () => this.loadDirectory(fav.path);
+
+      const delSpan = createElement("span", "", "×");
+      Object.assign(delSpan.style, {
+        marginLeft: "2px",
+        cursor: "pointer",
+        opacity: "0.6",
+        fontWeight: "bold",
+        fontSize: "12px",
+      });
+      delSpan.title = `Remove ${fav.name} from favorites`;
+      delSpan.onmouseenter = () => (delSpan.style.opacity = "1");
+      delSpan.onmouseleave = () => (delSpan.style.opacity = "0.6");
+      delSpan.onclick = (e) => {
+        e.stopPropagation();
+        this.removeFavorite(fav.path);
+      };
+
+      pill.appendChild(nameSpan);
+      pill.appendChild(delSpan);
+      this.favoritesBar.appendChild(pill);
+    });
+  }
+
   async loadDirectory(dirPath) {
     this.currentPath = dirPath;
     this.pathLabel.textContent = dirPath;
+    this.updateFavoriteButton();
+    this.renderDrivePills();
+    this.renderFavoritesBar();
     this.fileGridEl.innerHTML = '<div style="padding: 24px; text-align: center; color: #888;">Loading...</div>';
 
     try {
-      const url = `/api/vf-file-nodes/list?path=${encodeURIComponent(dirPath)}&filter=${encodeURIComponent(this.activeFilter)}`;
+      const url = `/api/vf-file-nodes/list?path=${encodeURIComponent(dirPath)}&filter=${encodeURIComponent(this.activeFilter)}&sort=${encodeURIComponent(this.sortBy)}`;
       const resp = await api.fetchApi(url);
       if (resp.ok) {
         const data = await resp.json();
@@ -148,7 +286,7 @@ class EmbeddedFileExplorer {
   renderSkeleton() {
     this.container.innerHTML = "";
 
-    // 1. Top Bar: Drives + Up + Path
+    // 1. Top Bar: Drives + Favorites + Up + Star + Path
     const topBar = createElement("div");
     Object.assign(topBar.style, {
       padding: "8px 12px",
@@ -165,6 +303,15 @@ class EmbeddedFileExplorer {
       gap: "6px",
       overflowX: "auto",
       paddingBottom: "2px",
+    });
+
+    this.favoritesBar = createElement("div");
+    Object.assign(this.favoritesBar.style, {
+      display: "none",
+      gap: "6px",
+      overflowX: "auto",
+      paddingBottom: "2px",
+      alignItems: "center",
     });
 
     const pathRow = createElement("div");
@@ -193,6 +340,20 @@ class EmbeddedFileExplorer {
       }
     };
 
+    this.favBtn = createElement("button", "", "☆");
+    Object.assign(this.favBtn.style, {
+      background: "#2a2a36",
+      color: "#888",
+      border: "1px solid #444",
+      borderRadius: "4px",
+      padding: "4px 8px",
+      cursor: "pointer",
+      fontSize: "13px",
+      lineHeight: "1",
+    });
+    this.favBtn.title = "Add current folder to favorites";
+    this.favBtn.onclick = () => this.toggleCurrentFavorite();
+
     this.pathLabel = createElement("div", "", this.currentPath);
     Object.assign(this.pathLabel.style, {
       flex: "1",
@@ -205,13 +366,15 @@ class EmbeddedFileExplorer {
     });
 
     pathRow.appendChild(upBtn);
+    pathRow.appendChild(this.favBtn);
     pathRow.appendChild(this.pathLabel);
 
     topBar.appendChild(this.driveRow);
+    topBar.appendChild(this.favoritesBar);
     topBar.appendChild(pathRow);
     this.container.appendChild(topBar);
 
-    // 2. Filter Bar: Media tabs + Search
+    // 2. Filter Bar: Media tabs + Sort dropdown + Search
     const filterBar = createElement("div");
     Object.assign(filterBar.style, {
       padding: "6px 12px",
@@ -254,10 +417,49 @@ class EmbeddedFileExplorer {
       tabsContainer.appendChild(tab);
     });
 
+    const rightControls = createElement("div");
+    rightControls.style.display = "flex";
+    rightControls.style.alignItems = "center";
+    rightControls.style.gap = "6px";
+
+    this.sortSelect = createElement("select");
+    Object.assign(this.sortSelect.style, {
+      background: "#282834",
+      color: "#eee",
+      border: "1px solid #3c3c4c",
+      borderRadius: "3px",
+      padding: "3px 6px",
+      fontSize: "11px",
+      outline: "none",
+      cursor: "pointer",
+    });
+
+    const sortOptions = [
+      { value: "name_asc", text: "Name (A-Z)" },
+      { value: "name_desc", text: "Name (Z-A)" },
+      { value: "mtime_desc", text: "Date (Newest)" },
+      { value: "mtime_asc", text: "Date (Oldest)" },
+      { value: "size_desc", text: "Size (Largest)" },
+      { value: "size_asc", text: "Size (Smallest)" },
+    ];
+
+    sortOptions.forEach((opt) => {
+      const el = document.createElement("option");
+      el.value = opt.value;
+      el.textContent = opt.text;
+      if (opt.value === this.sortBy) el.selected = true;
+      this.sortSelect.appendChild(el);
+    });
+
+    this.sortSelect.onchange = () => {
+      this.sortBy = this.sortSelect.value;
+      this.loadDirectory(this.currentPath);
+    };
+
     const searchInput = createElement("input");
     searchInput.placeholder = "Search...";
     Object.assign(searchInput.style, {
-      width: "120px",
+      width: "110px",
       background: "#282834",
       color: "#eee",
       border: "1px solid #3c3c4c",
@@ -271,8 +473,11 @@ class EmbeddedFileExplorer {
       this.renderGrid();
     };
 
+    rightControls.appendChild(this.sortSelect);
+    rightControls.appendChild(searchInput);
+
     filterBar.appendChild(tabsContainer);
-    filterBar.appendChild(searchInput);
+    filterBar.appendChild(rightControls);
     this.container.appendChild(filterBar);
 
     // 3. Grid area

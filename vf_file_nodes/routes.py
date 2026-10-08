@@ -161,9 +161,28 @@ async def handle_list(request: web.Request) -> web.Response:
     except PermissionError:
         pass
 
-    dirs.sort(key=str.lower)
-    dir_meta.sort(key=lambda d: str(d.get("name", "")).lower())
-    files.sort(key=lambda f: str(f.get("name", "")).lower())
+    sort_mode = request.query.get("sort", "name_asc").lower()
+
+    if sort_mode == "name_desc":
+        dirs.sort(key=str.lower, reverse=True)
+        dir_meta.sort(key=lambda d: str(d.get("name", "")).lower(), reverse=True)
+        files.sort(key=lambda f: str(f.get("name", "")).lower(), reverse=True)
+    elif sort_mode == "mtime_desc":
+        files.sort(key=lambda f: float(f.get("mtime", 0.0)), reverse=True)
+        dir_meta.sort(key=lambda d: float(d.get("mtime", 0.0)), reverse=True)
+        dirs = [str(d.get("name", "")) for d in dir_meta]
+    elif sort_mode == "mtime_asc":
+        files.sort(key=lambda f: float(f.get("mtime", 0.0)))
+        dir_meta.sort(key=lambda d: float(d.get("mtime", 0.0)))
+        dirs = [str(d.get("name", "")) for d in dir_meta]
+    elif sort_mode == "size_desc":
+        files.sort(key=lambda f: int(f.get("size", 0)), reverse=True)
+    elif sort_mode == "size_asc":
+        files.sort(key=lambda f: int(f.get("size", 0)))
+    else:  # name_asc default
+        dirs.sort(key=str.lower)
+        dir_meta.sort(key=lambda d: str(d.get("name", "")).lower())
+        files.sort(key=lambda f: str(f.get("name", "")).lower())
 
     return web.json_response({
         "dirs": dirs,
@@ -292,6 +311,95 @@ async def handle_open_in_explorer(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": str(exc)}, status=500)
 
 
+def _get_favorites_file() -> Path:
+    user_dir: Path | None = None
+    if folder_paths is not None:
+        try:
+            ud = folder_paths.get_user_directory()
+            if ud:
+                user_dir = Path(ud)
+        except Exception:
+            pass
+    if user_dir is None:
+        user_dir = Path.home() / ".comfyui" / "user"
+    fav_dir = user_dir / "vf_file_nodes"
+    fav_dir.mkdir(parents=True, exist_ok=True)
+    return fav_dir / "favorites.json"
+
+
+def _read_favorites() -> list[dict[str, str]]:
+    fav_file = _get_favorites_file()
+    if not fav_file.exists():
+        return []
+    try:
+        import json
+        data = json.loads(fav_file.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+    return []
+
+
+def _write_favorites(favorites: list[dict[str, str]]) -> None:
+    fav_file = _get_favorites_file()
+    import json
+    fav_file.write_text(json.dumps(favorites, indent=2), encoding="utf-8")
+
+
+async def handle_get_favorites(request: web.Request) -> web.Response:
+    """Return the persisted favorite folders list."""
+    return web.json_response({"favorites": _read_favorites()})
+
+
+async def handle_add_favorite(request: web.Request) -> web.Response:
+    """Add a folder to the favorites list."""
+    data = {}
+    if request.can_read_body:
+        try:
+            data = await request.json()
+        except Exception:
+            pass
+    folder_path = str(data.get("path") or request.query.get("path", "")).strip()
+    name = str(data.get("name") or "").strip()
+    if not folder_path:
+        return web.json_response({"success": False, "error": "Path required"}, status=400)
+
+    resolved = str(Path(folder_path).resolve())
+    if not name:
+        name = Path(resolved).name or resolved
+
+    favs = _read_favorites()
+    if not any(f.get("path", "").lower() == resolved.lower() for f in favs):
+        favs.append({"name": name, "path": resolved})
+        _write_favorites(favs)
+
+    return web.json_response({"success": True, "favorites": favs})
+
+
+async def handle_remove_favorite(request: web.Request) -> web.Response:
+    """Remove a folder from the favorites list."""
+    data = {}
+    if request.can_read_body:
+        try:
+            data = await request.json()
+        except Exception:
+            pass
+    folder_path = str(data.get("path") or request.query.get("path", "")).strip()
+    if not folder_path:
+        return web.json_response({"success": False, "error": "Path required"}, status=400)
+
+    resolved = str(Path(folder_path).resolve())
+    favs = _read_favorites()
+    favs = [
+        f for f in favs
+        if f.get("path", "").lower() != resolved.lower() and f.get("path", "").lower() != folder_path.lower()
+    ]
+    _write_favorites(favs)
+
+    return web.json_response({"success": True, "favorites": favs})
+
+
 def setup_routes(app: web.Application) -> None:
     """Register all routes on an aiohttp application."""
     app.router.add_get("/api/vf-file-nodes/drives", handle_drives)
@@ -302,6 +410,9 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("/api/vf-file-nodes/view", handle_view)
     app.router.add_post("/api/vf-file-nodes/delete", handle_delete)
     app.router.add_post("/api/vf-file-nodes/open-in-explorer", handle_open_in_explorer)
+    app.router.add_get("/api/vf-file-nodes/favorites", handle_get_favorites)
+    app.router.add_post("/api/vf-file-nodes/favorites/add", handle_add_favorite)
+    app.router.add_post("/api/vf-file-nodes/favorites/remove", handle_remove_favorite)
 
 
 def register_prompt_server_routes() -> None:
