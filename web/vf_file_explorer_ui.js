@@ -5,7 +5,16 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { setupDragPayload } from "./vf_canvas_drop.js";
-import { createElement, icon, isSupportedMediaFile, makeModalBackdrop } from "./vf_ui_shared.js";
+import {
+  createElement,
+  ensureSpinnerStyles,
+  formatDateTime,
+  formatDuration,
+  getEmptyFolderMessage,
+  icon,
+  isSupportedMediaFile,
+  makeModalBackdrop,
+} from "./vf_ui_shared.js";
 
 const DEFAULT_WIDTH = 640;
 const DEFAULT_HEIGHT = 680;
@@ -760,9 +769,19 @@ class EmbeddedFileExplorer {
       }
     };
 
+    // Filter visible items
+    const visibleDirs = this.dirs.filter((dirName) => {
+      if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return false;
+      return true;
+    });
+
+    const visibleFiles = this.files.filter((file) => {
+      if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return false;
+      return true;
+    });
+
     // Folders
-    this.dirs.forEach((dirName) => {
-      if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return;
+    visibleDirs.forEach((dirName) => {
       const card = createElement("div", "vf-card-dir");
       Object.assign(card.style, {
         background: "#1f1f28",
@@ -791,8 +810,8 @@ class EmbeddedFileExplorer {
     });
 
     // Files
-    this.files.forEach((file) => {
-      if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return;
+    visibleFiles.forEach((file) => {
+      const isSupported = isSupportedMediaFile(file);
       const card = createElement("div", "vf-card-file");
       card.draggable = true;
       Object.assign(card.style, {
@@ -804,7 +823,7 @@ class EmbeddedFileExplorer {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: isMosaic ? "flex-start" : "space-between",
-        gap: isMosaic ? "6px" : "0",
+        gap: isMosaic ? "4px" : "0",
         cursor: "pointer",
         position: "relative",
         boxSizing: "border-box",
@@ -827,6 +846,7 @@ class EmbeddedFileExplorer {
         borderRadius: "3px",
         background: "#14141a",
         overflow: "hidden",
+        position: "relative",
       });
 
       if (this.showThumbnails && (file.media_type === "image" || file.media_type === "video")) {
@@ -853,6 +873,49 @@ class EmbeddedFileExplorer {
         thumb.innerHTML = '<span style="font-size: 24px;">📄</span>';
       }
 
+      // Metadata Badges on Thumbnail (only for supported files)
+      if (isSupported) {
+        if (file.duration != null && file.duration > 0) {
+          const durBadge = createElement("span", "vf-badge-duration", formatDuration(file.duration));
+          Object.assign(durBadge.style, {
+            position: "absolute",
+            bottom: "3px",
+            right: "3px",
+            background: "rgba(0, 0, 0, 0.75)",
+            color: "#fff",
+            padding: "1px 4px",
+            borderRadius: "3px",
+            fontSize: "9px",
+            fontWeight: "600",
+            lineHeight: "1.1",
+            fontFamily: "monospace",
+            pointerEvents: "none",
+            zIndex: "2",
+          });
+          thumb.appendChild(durBadge);
+        }
+
+        if (file.dimensions && Array.isArray(file.dimensions) && file.dimensions.length === 2) {
+          const dimBadge = createElement("span", "vf-badge-dimensions", `${file.dimensions[0]}×${file.dimensions[1]}`);
+          Object.assign(dimBadge.style, {
+            position: "absolute",
+            top: "3px",
+            left: "3px",
+            background: "rgba(0, 0, 0, 0.75)",
+            color: "#ddd",
+            padding: "1px 4px",
+            borderRadius: "3px",
+            fontSize: "9px",
+            fontWeight: "500",
+            lineHeight: "1.1",
+            fontFamily: "monospace",
+            pointerEvents: "none",
+            zIndex: "2",
+          });
+          thumb.appendChild(dimBadge);
+        }
+      }
+
       const label = createElement("div", "", file.name);
       Object.assign(label.style, {
         fontSize: "10px",
@@ -866,6 +929,35 @@ class EmbeddedFileExplorer {
 
       card.appendChild(thumb);
       card.appendChild(label);
+
+      // Metadata Subtitle Line (creation date/time, dimensions, duration)
+      if (isSupported) {
+        const metaRow = createElement("div", "vf-card-meta");
+        Object.assign(metaRow.style, {
+          fontSize: "9px",
+          color: "#888",
+          marginTop: "2px",
+          width: "100%",
+          textAlign: "center",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          lineHeight: "1.2",
+        });
+        const metaParts = [];
+        if (file.ctime) metaParts.push(formatDateTime(file.ctime));
+        if (file.dimensions && Array.isArray(file.dimensions)) metaParts.push(`${file.dimensions[0]}×${file.dimensions[1]}`);
+        if (file.duration) metaParts.push(formatDuration(file.duration));
+        metaRow.textContent = metaParts.join(" • ");
+        card.appendChild(metaRow);
+
+        const tipParts = [`Name: ${file.name}`];
+        if (file.ctime) tipParts.push(`Created: ${new Date(file.ctime * 1000).toLocaleString()}`);
+        if (file.dimensions) tipParts.push(`Dimensions: ${file.dimensions[0]}×${file.dimensions[1]}`);
+        if (file.duration) tipParts.push(`Duration: ${formatDuration(file.duration)}`);
+        if (file.size) tipParts.push(`Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+        card.title = tipParts.join("\n");
+      }
 
       card.onclick = () => {
         this.fileGridEl.querySelectorAll(".vf-card-file").forEach((c) => {
@@ -883,6 +975,37 @@ class EmbeddedFileExplorer {
 
       appendItem(card);
     });
+
+    // Friendly empty message if no files to view
+    if (visibleFiles.length === 0) {
+      const emptyInfo = getEmptyFolderMessage(this.activeFilter, this.searchQuery, visibleDirs.length > 0);
+      const emptyEl = createElement("div", "vf-empty-folder-message");
+      Object.assign(emptyEl.style, {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "32px 16px",
+        color: "#888",
+        textAlign: "center",
+        width: "100%",
+        boxSizing: "border-box",
+        userSelect: "none",
+        gridColumn: isMosaic ? "" : "1 / -1",
+      });
+      emptyEl.innerHTML = `
+        <div style="font-size: 32px; margin-bottom: 8px; opacity: 0.5;">${emptyInfo.icon}</div>
+        <div style="font-size: 13px; font-weight: 500; color: #bbb;">${emptyInfo.title}</div>
+        <div style="font-size: 11px; margin-top: 4px; color: #777;">${emptyInfo.subtitle}</div>
+      `;
+      if (isMosaic && visibleDirs.length === 0) {
+        this.fileGridEl.style.display = "flex";
+        this.fileGridEl.style.flexDirection = "column";
+        this.fileGridEl.style.alignItems = "center";
+        this.fileGridEl.style.justifyContent = "center";
+      }
+      this.fileGridEl.appendChild(emptyEl);
+    }
   }
 
   selectFile(file) {
@@ -952,16 +1075,46 @@ class EmbeddedFileExplorer {
     header.appendChild(closeBtn);
     content.appendChild(header);
 
+    ensureSpinnerStyles();
     const body = createElement("div");
     Object.assign(body.style, {
       padding: "16px",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      minWidth: "300px",
-      minHeight: "200px",
+      minWidth: "320px",
+      minHeight: "220px",
       position: "relative",
     });
+
+    const spinner = createElement("div", "vf-modal-spinner");
+    Object.assign(spinner.style, {
+      position: "absolute",
+      inset: "0",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "12px",
+      color: "#aaa",
+      fontSize: "12px",
+      zIndex: "5",
+      background: "#181820",
+      minHeight: "220px",
+      minWidth: "320px",
+    });
+    spinner.innerHTML = `
+      <div style="
+        width: 36px;
+        height: 36px;
+        border: 3px solid rgba(255, 255, 255, 0.12);
+        border-top-color: #0088ff;
+        border-radius: 50%;
+        animation: vf-spin 0.8s linear infinite;
+      "></div>
+      <div style="font-weight: 500; color: #aaa;">Loading preview...</div>
+    `;
+    body.appendChild(spinner);
 
     if (file.media_type === "image") {
       const imageContainer = createElement("div", "vf-modal-image-container");
@@ -974,11 +1127,20 @@ class EmbeddedFileExplorer {
         maxWidth: "85vw",
         maxHeight: "75vh",
         borderRadius: "4px",
+        opacity: "0",
+        transition: "opacity 0.15s ease-in",
       });
       imageContainer.title = "🔍 Use scroll wheel to zoom (up to 4x)";
 
       const img = document.createElement("img");
       img.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`;
+      img.onload = () => {
+        spinner.remove();
+        imageContainer.style.opacity = "1";
+      };
+      img.onerror = () => {
+        spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load image preview</span>`;
+      };
       Object.assign(img.style, {
         maxWidth: "85vw",
         maxHeight: "75vh",
@@ -1118,12 +1280,30 @@ class EmbeddedFileExplorer {
       video.autoplay = true;
       video.style.maxWidth = "80vw";
       video.style.maxHeight = "75vh";
+      video.style.opacity = "0";
+      video.style.transition = "opacity 0.15s ease-in";
+      video.onloadeddata = () => {
+        spinner.remove();
+        video.style.opacity = "1";
+      };
+      video.onerror = () => {
+        spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load video preview</span>`;
+      };
       body.appendChild(video);
     } else if (file.media_type === "audio") {
       const audio = document.createElement("audio");
       audio.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`;
       audio.controls = true;
       audio.autoplay = true;
+      audio.style.opacity = "0";
+      audio.style.transition = "opacity 0.15s ease-in";
+      audio.onloadeddata = () => {
+        spinner.remove();
+        audio.style.opacity = "1";
+      };
+      audio.onerror = () => {
+        spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load audio preview</span>`;
+      };
       body.appendChild(audio);
     } else {
       const pre = createElement("pre");
@@ -1136,10 +1316,22 @@ class EmbeddedFileExplorer {
         background: "#101014",
         padding: "12px",
         borderRadius: "4px",
+        opacity: "0",
+        transition: "opacity 0.15s ease-in",
       });
       fetch(`/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`)
-        .then((r) => r.text())
-        .then((t) => { pre.textContent = t.slice(0, 50000); });
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.text();
+        })
+        .then((t) => {
+          spinner.remove();
+          pre.textContent = t.slice(0, 50000);
+          pre.style.opacity = "1";
+        })
+        .catch(() => {
+          spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load text preview</span>`;
+        });
       body.appendChild(pre);
     }
 

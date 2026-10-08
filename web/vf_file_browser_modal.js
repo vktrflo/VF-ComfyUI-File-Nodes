@@ -3,7 +3,15 @@
  */
 
 import { api } from "../../scripts/api.js";
-import { createElement, icon, isSupportedMediaFile, makeModalBackdrop } from "./vf_ui_shared.js";
+import {
+  createElement,
+  formatDateTime,
+  formatDuration,
+  getEmptyFolderMessage,
+  icon,
+  isSupportedMediaFile,
+  makeModalBackdrop,
+} from "./vf_ui_shared.js";
 
 export class VFFileBrowserModal {
   constructor(node, targetWidget, options = {}) {
@@ -554,7 +562,7 @@ export class VFFileBrowserModal {
       padding: "12px 16px",
       display: "grid",
       gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))",
-      gridAutoRows: "140px",
+      gridAutoRows: "145px",
       gap: "10px",
       background: "#16161c",
       boxSizing: "border-box",
@@ -729,7 +737,7 @@ export class VFFileBrowserModal {
       this._currentCols = null;
       this.fileListEl.style.display = "grid";
       this.fileListEl.style.gridTemplateColumns = "repeat(auto-fill, minmax(130px, 1fr))";
-      this.fileListEl.style.gridAutoRows = this.showThumbnails ? "140px" : "100px";
+      this.fileListEl.style.gridAutoRows = this.showThumbnails ? "145px" : "105px";
       this.fileListEl.style.flexDirection = "";
       this.fileListEl.style.alignItems = "";
       this.fileListEl.style.gap = "10px";
@@ -746,9 +754,19 @@ export class VFFileBrowserModal {
       }
     };
 
+    // Filter visible items
+    const visibleDirs = this.dirs.filter((dirName) => {
+      if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return false;
+      return true;
+    });
+
+    const visibleFiles = this.files.filter((file) => {
+      if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return false;
+      return true;
+    });
+
     // Folders first
-    this.dirs.forEach((dirName) => {
-      if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return;
+    visibleDirs.forEach((dirName) => {
       const card = createElement("div", "vf-card-dir");
       Object.assign(card.style, {
         background: "#22222c",
@@ -779,8 +797,8 @@ export class VFFileBrowserModal {
     });
 
     // Files
-    this.files.forEach((file) => {
-      if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return;
+    visibleFiles.forEach((file) => {
+      const isSupported = isSupportedMediaFile(file);
       const card = createElement("div", "vf-card-file");
       Object.assign(card.style, {
         background: "#22222c",
@@ -811,6 +829,7 @@ export class VFFileBrowserModal {
         overflow: "hidden",
         borderRadius: "4px",
         background: "#16161c",
+        position: "relative",
       });
 
       if (this.showThumbnails && (file.media_type === "image" || file.media_type === "video")) {
@@ -837,6 +856,49 @@ export class VFFileBrowserModal {
         previewContainer.innerHTML = '<span style="font-size: 28px;">📄</span>';
       }
 
+      // Metadata Badges on Thumbnail (only for supported files)
+      if (isSupported) {
+        if (file.duration != null && file.duration > 0) {
+          const durBadge = createElement("span", "vf-badge-duration", formatDuration(file.duration));
+          Object.assign(durBadge.style, {
+            position: "absolute",
+            bottom: "3px",
+            right: "3px",
+            background: "rgba(0, 0, 0, 0.75)",
+            color: "#fff",
+            padding: "1px 4px",
+            borderRadius: "3px",
+            fontSize: "9px",
+            fontWeight: "600",
+            lineHeight: "1.1",
+            fontFamily: "monospace",
+            pointerEvents: "none",
+            zIndex: "2",
+          });
+          previewContainer.appendChild(durBadge);
+        }
+
+        if (file.dimensions && Array.isArray(file.dimensions) && file.dimensions.length === 2) {
+          const dimBadge = createElement("span", "vf-badge-dimensions", `${file.dimensions[0]}×${file.dimensions[1]}`);
+          Object.assign(dimBadge.style, {
+            position: "absolute",
+            top: "3px",
+            left: "3px",
+            background: "rgba(0, 0, 0, 0.75)",
+            color: "#ddd",
+            padding: "1px 4px",
+            borderRadius: "3px",
+            fontSize: "9px",
+            fontWeight: "500",
+            lineHeight: "1.1",
+            fontFamily: "monospace",
+            pointerEvents: "none",
+            zIndex: "2",
+          });
+          previewContainer.appendChild(dimBadge);
+        }
+      }
+
       const label = createElement("div", "", file.name);
       Object.assign(label.style, {
         fontSize: "11px",
@@ -851,6 +913,35 @@ export class VFFileBrowserModal {
 
       card.appendChild(previewContainer);
       card.appendChild(label);
+
+      // Metadata Subtitle Line (creation date/time, dimensions, duration)
+      if (isSupported) {
+        const metaRow = createElement("div", "vf-card-meta");
+        Object.assign(metaRow.style, {
+          fontSize: "9px",
+          color: "#888",
+          marginTop: "2px",
+          width: "100%",
+          textAlign: "center",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          lineHeight: "1.2",
+        });
+        const metaParts = [];
+        if (file.ctime) metaParts.push(formatDateTime(file.ctime));
+        if (file.dimensions && Array.isArray(file.dimensions)) metaParts.push(`${file.dimensions[0]}×${file.dimensions[1]}`);
+        if (file.duration) metaParts.push(formatDuration(file.duration));
+        metaRow.textContent = metaParts.join(" • ");
+        card.appendChild(metaRow);
+
+        const tipParts = [`Name: ${file.name}`];
+        if (file.ctime) tipParts.push(`Created: ${new Date(file.ctime * 1000).toLocaleString()}`);
+        if (file.dimensions) tipParts.push(`Dimensions: ${file.dimensions[0]}×${file.dimensions[1]}`);
+        if (file.duration) tipParts.push(`Duration: ${formatDuration(file.duration)}`);
+        if (file.size) tipParts.push(`Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+        card.title = tipParts.join("\n");
+      }
 
       card.onclick = () => {
         // Highlight selection
@@ -869,6 +960,37 @@ export class VFFileBrowserModal {
 
       appendItem(card);
     });
+
+    // Friendly empty message if no files to view
+    if (visibleFiles.length === 0) {
+      const emptyInfo = getEmptyFolderMessage(this.filter, this.searchQuery, visibleDirs.length > 0);
+      const emptyEl = createElement("div", "vf-empty-folder-message");
+      Object.assign(emptyEl.style, {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "32px 16px",
+        color: "#888",
+        textAlign: "center",
+        width: "100%",
+        boxSizing: "border-box",
+        userSelect: "none",
+        gridColumn: isMosaic ? "" : "1 / -1",
+      });
+      emptyEl.innerHTML = `
+        <div style="font-size: 32px; margin-bottom: 8px; opacity: 0.5;">${emptyInfo.icon}</div>
+        <div style="font-size: 13px; font-weight: 500; color: #bbb;">${emptyInfo.title}</div>
+        <div style="font-size: 11px; margin-top: 4px; color: #777;">${emptyInfo.subtitle}</div>
+      `;
+      if (isMosaic && visibleDirs.length === 0) {
+        this.fileListEl.style.display = "flex";
+        this.fileListEl.style.flexDirection = "column";
+        this.fileListEl.style.alignItems = "center";
+        this.fileListEl.style.justifyContent = "center";
+      }
+      this.fileListEl.appendChild(emptyEl);
+    }
   }
 }
 

@@ -109,3 +109,34 @@ class TestFileNodesRoutes(AioHTTPTestCase):
             # 3. Deleting non-existent file
             resp_none = await self.client.post("/api/vf-file-nodes/delete", json={"path": str(sup_file)})
             assert resp_none.status == 404
+
+    @unittest_run_loop
+    async def test_thumbnail_and_metadata(self):
+        import tempfile
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_img = Path(tmpdir) / "test_thumb.jpg"
+            im = Image.new("RGB", (640, 480), color="blue")
+            im.save(test_img, "JPEG")
+
+            # 1. Test handle_list returns ctime and dimensions
+            list_resp = await self.client.get(f"/api/vf-file-nodes/list?path={tmpdir}&filter=image")
+            assert list_resp.status == 200
+            list_data = await list_resp.json()
+            assert len(list_data["files"]) == 1
+            f = list_data["files"][0]
+            assert f["name"] == "test_thumb.jpg"
+            assert "ctime" in f and f["ctime"] > 0
+            assert f["dimensions"] == [640, 480]
+
+            # 2. Test handle_thumbnail generates JPEG stream
+            thumb_resp = await self.client.get(f"/api/vf-file-nodes/thumbnail?path={test_img}")
+            assert thumb_resp.status == 200
+            assert thumb_resp.headers["Content-Type"] == "image/jpeg"
+            thumb_bytes = await thumb_resp.read()
+            assert len(thumb_bytes) > 0
+            # Test it is a valid JPEG image
+            with Image.open(Path(tmpdir) / "test_thumb.jpg") as read_im:
+                assert read_im.size == (640, 480)
+

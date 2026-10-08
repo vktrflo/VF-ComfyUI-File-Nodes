@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import io
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +38,128 @@ except ImportError:
 # In-memory thumbnail cache: path -> (mtime, jpeg_bytes)
 _THUMBNAIL_CACHE: dict[str, tuple[float, bytes]] = {}
 MAX_THUMB_CACHE_SIZE = 1000
+
+# Metadata cache: path -> (mtime, size, meta_dict)
+_METADATA_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
+MAX_META_CACHE_SIZE = 10000
+
+_DISK_CACHE_DIR: Path | None = None
+
+
+def _get_disk_cache_dir() -> Path:
+    global _DISK_CACHE_DIR
+    if _DISK_CACHE_DIR is None:
+        base = None
+        if folder_paths is not None:
+            try:
+                user_dir = folder_paths.get_user_directory()
+                if user_dir and os.path.exists(user_dir):
+                    base = os.path.join(user_dir, ".cache", "vf_thumbnails")
+            except Exception:
+                base = None
+        if not base:
+            base = os.path.join(tempfile.gettempdir(), "comfyui_vf_thumbnails")
+        os.makedirs(base, exist_ok=True)
+        _DISK_CACHE_DIR = Path(base)
+    return _DISK_CACHE_DIR
+
+
+def _get_cache_key(file_path: str, mtime: float, size: int) -> str:
+    h = hashlib.sha256(f"{file_path}:{mtime}:{size}".encode("utf-8")).hexdigest()
+    return h[:32]
+
+
+def get_media_metadata(file_path: str, media_type: str, st: os.stat_result) -> dict[str, Any]:
+    """Extract creation time, dimensions, and duration for supported media types."""
+    cached = _METADATA_CACHE.get(file_path)
+    if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+        return cached[2]
+
+    meta: dict[str, Any] = {
+        "dimensions": None,
+        "duration": None,
+        "ctime": getattr(st, "st_ctime", st.st_mtime),
+    }
+
+    try:
+        if media_type == "image":
+            with Image.open(file_path) as im:
+                meta["dimensions"] = [im.width, im.height]
+        elif media_type == "video":
+            import av
+
+            with av.open(file_path) as container:
+                stream = next((s for s in container.streams if s.type == "video"), None)
+                if stream:
+                    meta["dimensions"] = [stream.width, stream.height]
+                if container.duration is not None and av.time_base:
+                    meta["duration"] = round(float(container.duration) / av.time_base, 2)
+                elif stream and stream.duration is not None and stream.time_base:
+                    meta["duration"] = round(float(stream.duration * stream.time_base), 2)
+        elif media_type == "audio":
+            import av
+
+            with av.open(file_path) as container:
+                if container.duration is not None and av.time_base:
+                    meta["duration"] = round(float(container.duration) / av.time_base, 2)
+                else:
+                    stream = next((s for s in container.streams if s.type == "audio"), None)
+                    if stream and stream.duration is not None and stream.time_base:
+                        meta["duration"] = round(float(stream.duration * stream.time_base), 2)
+    except Exception:
+        pass
+
+    if len(_METADATA_CACHE) > MAX_META_CACHE_SIZE:
+        _METADATA_CACHE.clear()
+    _METADATA_CACHE[file_path] = (st.st_mtime, st.st_size, meta)
+    return meta
+
+
+def _generate_thumbnail_worker(file_path: str, media_type: str, cache_file: Path) -> bytes | None:
+    """Generate thumbnail image in background worker thread."""
+    thumb_img: Image.Image | None = None
+
+    try:
+        if media_type == "image":
+            with Image.open(file_path) as im:
+                if hasattr(im, "draft") and file_path.lower().endswith((".jpg", ".jpeg")):
+                    try:
+                        im.draft("RGB", (256, 256))
+                    except Exception:
+                        pass
+                im = im.convert("RGB")
+                im.thumbnail((256, 256), Image.Resampling.BILINEAR)
+                thumb_img = im
+        elif media_type == "video":
+            import av
+
+            with av.open(file_path) as container:
+                stream = next((s for s in container.streams if s.type == "video"), None)
+                if stream:
+                    stream.thread_type = "AUTO"
+                    for frame in container.decode(stream):
+                        im = frame.to_image().convert("RGB")
+                        im.thumbnail((256, 256), Image.Resampling.BILINEAR)
+                        thumb_img = im
+                        break
+
+        if thumb_img is None:
+            return None
+
+        buf = io.BytesIO()
+        thumb_img.save(buf, format="JPEG", quality=80)
+        jpeg_bytes = buf.getvalue()
+
+        try:
+            tmp_cache = cache_file.with_suffix(".tmp")
+            tmp_cache.write_bytes(jpeg_bytes)
+            tmp_cache.replace(cache_file)
+        except Exception:
+            pass
+
+        return jpeg_bytes
+    except Exception:
+        return None
 
 
 async def handle_drives(request: web.Request) -> web.Response:
@@ -148,13 +273,17 @@ async def handle_list(request: web.Request) -> web.Response:
 
                         if include:
                             st = entry.stat()
+                            meta = get_media_metadata(entry.path, media_type, st)
                             files.append({
                                 "name": entry.name,
                                 "path": entry.path,
                                 "size": st.st_size,
                                 "mtime": st.st_mtime,
+                                "ctime": meta.get("ctime", getattr(st, "st_ctime", st.st_mtime)),
                                 "extension": ext,
                                 "media_type": media_type,
+                                "dimensions": meta.get("dimensions"),
+                                "duration": meta.get("duration"),
                             })
                 except (PermissionError, OSError):
                     continue
@@ -193,7 +322,7 @@ async def handle_list(request: web.Request) -> web.Response:
 
 
 async def handle_thumbnail(request: web.Request) -> web.StreamResponse:
-    """Generate or retrieve cached thumbnail image."""
+    """Generate or retrieve cached thumbnail image with offloaded worker threads."""
     file_path = request.query.get("path", "")
     if not file_path or not os.path.isfile(file_path):
         return web.Response(status=404, text="File not found")
@@ -204,43 +333,38 @@ async def handle_thumbnail(request: web.Request) -> web.StreamResponse:
     except OSError:
         return web.Response(status=404, text="Cannot stat file")
 
+    # 1. Check in-memory cache
     cached = _THUMBNAIL_CACHE.get(file_path)
     if cached and cached[0] == mtime:
         return web.Response(body=cached[1], content_type="image/jpeg")
 
     media_type = classify_media_type(file_path)
-    thumb_img: Image.Image | None = None
+    if media_type not in ("image", "video"):
+        return web.Response(status=415, text="Thumbnail not supported")
 
+    # 2. Check disk cache
+    cache_key = _get_cache_key(file_path, mtime, st.st_size)
+    cache_file = _get_disk_cache_dir() / f"{cache_key}.jpg"
+
+    if cache_file.exists():
+        try:
+            jpeg_bytes = await asyncio.to_thread(cache_file.read_bytes)
+            if len(_THUMBNAIL_CACHE) > MAX_THUMB_CACHE_SIZE:
+                _THUMBNAIL_CACHE.clear()
+            _THUMBNAIL_CACHE[file_path] = (mtime, jpeg_bytes)
+            return web.Response(body=jpeg_bytes, content_type="image/jpeg")
+        except OSError:
+            pass
+
+    # 3. Offload generation to background worker thread so the event loop stays responsive
     try:
-        if media_type == "image":
-            with Image.open(file_path) as im:
-                im = im.convert("RGB")
-                im.thumbnail((256, 256), Image.Resampling.LANCZOS)
-                thumb_img = im
-        elif media_type == "video":
-            import av
-
-            container = av.open(file_path)
-            stream = next((s for s in container.streams if s.type == "video"), None)
-            if stream:
-                for frame in container.decode(stream):
-                    im = frame.to_image().convert("RGB")
-                    im.thumbnail((256, 256), Image.Resampling.LANCZOS)
-                    thumb_img = im
-                    break
-            container.close()
-
-        if thumb_img is None:
-            return web.Response(status=415, text="Thumbnail not supported")
-
-        buf = io.BytesIO()
-        thumb_img.save(buf, format="JPEG", quality=80)
-        jpeg_bytes = buf.getvalue()
+        jpeg_bytes = await asyncio.to_thread(_generate_thumbnail_worker, file_path, media_type, cache_file)
+        if jpeg_bytes is None:
+            return web.Response(status=415, text="Thumbnail generation failed")
 
         if len(_THUMBNAIL_CACHE) > MAX_THUMB_CACHE_SIZE:
             _THUMBNAIL_CACHE.clear()
         _THUMBNAIL_CACHE[file_path] = (mtime, jpeg_bytes)
-
         return web.Response(body=jpeg_bytes, content_type="image/jpeg")
     except Exception as exc:
         return web.Response(status=500, text=f"Thumbnail error: {exc}")

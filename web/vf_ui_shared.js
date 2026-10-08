@@ -99,3 +99,86 @@ export function isSupportedMediaFile(file) {
   const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
   return SUPPORTED_EXTENSIONS.has(ext);
 }
+
+export function ensureSpinnerStyles() {
+  if (typeof document === "undefined") return;
+  if (!document.getElementById("vf-ui-shared-styles")) {
+    const style = document.createElement("style");
+    style.id = "vf-ui-shared-styles";
+    style.textContent = `
+      @keyframes vf-spin {
+        to { transform: rotate(360deg); }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
+
+export function formatDateTime(sec) {
+  if (!sec || isNaN(sec)) return "";
+  const d = new Date(sec * 1000);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const dateStr = d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+  const timeStr = d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${dateStr}, ${timeStr}`;
+}
+
+export function formatDuration(sec) {
+  if (sec == null || isNaN(sec) || sec <= 0) return "";
+  const total = Math.floor(sec);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const sPad = s < 10 ? `0${s}` : `${s}`;
+  if (h > 0) {
+    const mPad = m < 10 ? `0${m}` : `${m}`;
+    return `${h}:${mPad}:${sPad}`;
+  }
+  return `${m}:${sPad}`;
+}
+
+export function getEmptyFolderMessage(filter = "all", searchQuery = "", hasDirs = false) {
+  if (searchQuery) {
+    return {
+      title: "No matching files",
+      subtitle: `No files found matching "${searchQuery}"`,
+      icon: "🔍",
+    };
+  }
+  const typeLabels = {
+    all: "files",
+    image: "image files",
+    video: "video files",
+    audio: "audio files",
+    text: "text files",
+  };
+  const label = typeLabels[filter] || "files";
+  if (!hasDirs) {
+    if (filter === "all") {
+      return {
+        title: "This folder is empty",
+        subtitle: "No files or subfolders found here",
+        icon: "📂",
+      };
+    }
+    return {
+      title: `No ${label} found`,
+      subtitle: `There are no ${label} in this folder`,
+      icon: "📂",
+    };
+  }
+  return {
+    title: `No ${label} to view`,
+    subtitle: `This folder has subfolders, but no ${label}`,
+    icon: "📁",
+  };
+}
