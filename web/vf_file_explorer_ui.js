@@ -5,7 +5,7 @@
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { setupDragPayload } from "./vf_canvas_drop.js";
-import { createElement, icon, makeModalBackdrop } from "./vf_ui_shared.js";
+import { createElement, icon, isSupportedMediaFile, makeModalBackdrop } from "./vf_ui_shared.js";
 
 const DEFAULT_WIDTH = 640;
 const DEFAULT_HEIGHT = 680;
@@ -91,6 +91,11 @@ class EmbeddedFileExplorer {
     await this.loadDrives();
     await this.loadFavorites();
     await this.loadDirectory(this.currentPath);
+    if (this.selectedFile) {
+      this.selectFile(this.selectedFile);
+    } else {
+      this.selectFile(null);
+    }
   }
 
   async initStartPath() {
@@ -235,7 +240,10 @@ class EmbeddedFileExplorer {
       pill.title = fav.path;
 
       const nameSpan = createElement("span", "", fav.name || fav.path);
-      nameSpan.onclick = () => this.loadDirectory(fav.path);
+      nameSpan.onclick = () => {
+        this.selectFile(null);
+        this.loadDirectory(fav.path);
+      };
 
       const delSpan = createElement("span", "", "×");
       Object.assign(delSpan.style, {
@@ -336,6 +344,7 @@ class EmbeddedFileExplorer {
       if (parts.length > 1) {
         parts.pop();
         const parent = parts.join("/") + (parts.length === 1 && parts[0].endsWith(":") ? "/" : "");
+        this.selectFile(null);
         this.loadDirectory(parent);
       }
     };
@@ -537,8 +546,8 @@ class EmbeddedFileExplorer {
       });
     };
 
-    const delBtn = createElement("button", "", "Delete");
-    Object.assign(delBtn.style, {
+    this.delBtn = createElement("button", "", "Delete");
+    Object.assign(this.delBtn.style, {
       background: "#3e1818",
       color: "#ff7777",
       border: "1px solid #662626",
@@ -546,9 +555,10 @@ class EmbeddedFileExplorer {
       padding: "4px 8px",
       fontSize: "11px",
       cursor: "pointer",
+      display: "none",
     });
-    delBtn.onclick = async () => {
-      if (!this.selectedFile) return;
+    this.delBtn.onclick = async () => {
+      if (!this.selectedFile || !isSupportedMediaFile(this.selectedFile)) return;
       if (confirm(`Delete ${this.selectedFile.name}?`)) {
         const resp = await api.fetchApi("/api/vf-file-nodes/delete", {
           method: "POST",
@@ -556,7 +566,6 @@ class EmbeddedFileExplorer {
           body: JSON.stringify({ path: this.selectedFile.path }),
         });
         if (resp.ok) {
-          this.selectedFile = null;
           this.selectFile(null);
           this.loadDirectory(this.currentPath);
         }
@@ -564,7 +573,7 @@ class EmbeddedFileExplorer {
     };
 
     btnGroup.appendChild(revealBtn);
-    btnGroup.appendChild(delBtn);
+    btnGroup.appendChild(this.delBtn);
 
     statusBar.appendChild(this.statusText);
     statusBar.appendChild(btnGroup);
@@ -589,7 +598,10 @@ class EmbeddedFileExplorer {
         cursor: "pointer",
         whiteSpace: "nowrap",
       });
-      pill.onclick = () => this.loadDirectory(d.path);
+      pill.onclick = () => {
+        this.selectFile(null);
+        this.loadDirectory(d.path);
+      };
       this.driveRow.appendChild(pill);
     });
   }
@@ -618,6 +630,7 @@ class EmbeddedFileExplorer {
         <span style="font-size: 10px; font-weight: 500; word-break: break-word; line-height: 1.2; max-height: 2.4em; overflow: hidden;">${dirName}</span>`;
       card.onclick = () => {
         const next = this.currentPath.replace(/[/\\]$/, "") + "/" + dirName;
+        this.selectFile(null);
         this.loadDirectory(next);
       };
       this.fileGridEl.appendChild(card);
@@ -705,6 +718,10 @@ class EmbeddedFileExplorer {
 
   selectFile(file) {
     this.selectedFile = file;
+    const isSupported = isSupportedMediaFile(file);
+    if (this.delBtn) {
+      this.delBtn.style.display = isSupported ? "inline-block" : "none";
+    }
     if (file) {
       this.statusText.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
       if (this.pathWidget) {

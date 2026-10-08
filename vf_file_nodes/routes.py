@@ -273,6 +273,13 @@ async def handle_delete(request: web.Request) -> web.Response:
     if not os.path.isfile(target):
         return web.json_response({"success": False, "error": "Target is not a file"}, status=400)
 
+    media_type = classify_media_type(target)
+    if media_type not in ("image", "video", "audio", "text"):
+        return web.json_response(
+            {"success": False, "error": "Only supported media files (image, video, audio, text) can be deleted"},
+            status=400,
+        )
+
     try:
         os.remove(target)
         _THUMBNAIL_CACHE.pop(target, None)

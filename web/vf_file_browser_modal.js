@@ -3,7 +3,7 @@
  */
 
 import { api } from "../../scripts/api.js";
-import { createElement, icon, makeModalBackdrop } from "./vf_ui_shared.js";
+import { createElement, icon, isSupportedMediaFile, makeModalBackdrop } from "./vf_ui_shared.js";
 
 export class VFFileBrowserModal {
   constructor(node, targetWidget, options = {}) {
@@ -36,6 +36,11 @@ export class VFFileBrowserModal {
     await this.loadDrives();
     await this.loadFavorites();
     await this.loadDirectory(this.currentPath);
+    if (this.selectedFile) {
+      this.selectFile(this.selectedFile);
+    } else {
+      this.selectFile(null);
+    }
   }
 
   dispose() {
@@ -188,7 +193,10 @@ export class VFFileBrowserModal {
       pill.title = fav.path;
 
       const nameSpan = createElement("span", "", fav.name || fav.path);
-      nameSpan.onclick = () => this.loadDirectory(fav.path);
+      nameSpan.onclick = () => {
+        this.selectFile(null);
+        this.loadDirectory(fav.path);
+      };
 
       const delSpan = createElement("span", "", "×");
       Object.assign(delSpan.style, {
@@ -210,6 +218,19 @@ export class VFFileBrowserModal {
       pill.appendChild(delSpan);
       this.favoritesBar.appendChild(pill);
     });
+  }
+
+  selectFile(file) {
+    this.selectedFile = file;
+    const isSupported = isSupportedMediaFile(file);
+    if (this.deleteBtn) {
+      this.deleteBtn.style.display = isSupported ? "inline-block" : "none";
+    }
+    if (file) {
+      this.selectedLabel.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+    } else {
+      this.selectedLabel.textContent = "No file selected";
+    }
   }
 
   async loadDirectory(dirPath) {
@@ -325,7 +346,10 @@ export class VFFileBrowserModal {
       fontSize: "12px",
       outline: "none",
     });
-    this.driveSelect.onchange = () => this.loadDirectory(this.driveSelect.value);
+    this.driveSelect.onchange = () => {
+      this.selectFile(null);
+      this.loadDirectory(this.driveSelect.value);
+    };
 
     const upBtn = createElement("button", "", "⬆ Up");
     Object.assign(upBtn.style, {
@@ -342,6 +366,7 @@ export class VFFileBrowserModal {
       if (parts.length > 1) {
         parts.pop();
         const parent = parts.join("/") + (parts.length === 1 && parts[0].endsWith(":") ? "/" : "");
+        this.selectFile(null);
         this.loadDirectory(parent);
       }
     };
@@ -501,8 +526,8 @@ export class VFFileBrowserModal {
       });
     };
 
-    const deleteBtn = createElement("button", "", "Delete");
-    Object.assign(deleteBtn.style, {
+    this.deleteBtn = createElement("button", "", "Delete");
+    Object.assign(this.deleteBtn.style, {
       background: "#401818",
       color: "#ff8888",
       border: "1px solid #702828",
@@ -510,9 +535,10 @@ export class VFFileBrowserModal {
       padding: "6px 12px",
       cursor: "pointer",
       fontSize: "12px",
+      display: "none",
     });
-    deleteBtn.onclick = async () => {
-      if (!this.selectedFile) return;
+    this.deleteBtn.onclick = async () => {
+      if (!this.selectedFile || !isSupportedMediaFile(this.selectedFile)) return;
       if (confirm(`Are you sure you want to permanently delete:\n${this.selectedFile.name}?`)) {
         const resp = await api.fetchApi("/api/vf-file-nodes/delete", {
           method: "POST",
@@ -520,8 +546,7 @@ export class VFFileBrowserModal {
           body: JSON.stringify({ path: this.selectedFile.path }),
         });
         if (resp.ok) {
-          this.selectedFile = null;
-          this.selectedLabel.textContent = "Deleted";
+          this.selectFile(null);
           this.loadDirectory(this.currentPath);
         } else {
           alert("Failed to delete file.");
@@ -547,7 +572,7 @@ export class VFFileBrowserModal {
     };
 
     actions.appendChild(explorerBtn);
-    actions.appendChild(deleteBtn);
+    actions.appendChild(this.deleteBtn);
     actions.appendChild(selectBtn);
 
     footer.appendChild(this.selectedLabel);
@@ -594,6 +619,7 @@ export class VFFileBrowserModal {
 
       card.onclick = () => {
         const next = this.currentPath.replace(/[/\\]$/, "") + "/" + dirName;
+        this.selectFile(null);
         this.loadDirectory(next);
       };
       this.fileListEl.appendChild(card);
@@ -670,8 +696,7 @@ export class VFFileBrowserModal {
         });
         card.style.borderColor = "#0088ff";
         card.style.background = "#2a2d3c";
-        this.selectedFile = file;
-        this.selectedLabel.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+        this.selectFile(file);
       };
 
       card.ondblclick = () => {

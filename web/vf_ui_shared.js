@@ -76,3 +76,24 @@ export function makeModalBackdrop({ onClose, zIndex = 10000 } = {}) {
 
   return { backdrop, close: cleanup };
 }
+
+export const SUPPORTED_EXTENSIONS = new Set([
+  // Image
+  ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".tga", ".exr",
+  // Video
+  ".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v", ".flv", ".wmv",
+  // Audio
+  ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".aiff", ".opus",
+  // Text
+  ".txt", ".json", ".md", ".yaml", ".yml", ".csv", ".xml", ".html", ".css", ".js", ".py", ".toml",
+]);
+
+export function isSupportedMediaFile(file) {
+  if (!file) return false;
+  if (file.media_type && ["image", "video", "audio", "text"].includes(file.media_type)) {
+    return true;
+  }
+  const name = file.name || file.path || "";
+  const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+  return SUPPORTED_EXTENSIONS.has(ext);
+}

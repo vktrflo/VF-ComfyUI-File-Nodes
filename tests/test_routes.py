@@ -81,3 +81,31 @@ class TestFileNodesRoutes(AioHTTPTestCase):
         assert rem_resp.status == 200
         rem_data = await rem_resp.json()
         assert not any(f["path"] == test_folder for f in rem_data["favorites"])
+
+    @unittest_run_loop
+    async def test_delete_supported_file_only(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sup_file = Path(tmpdir) / "sample.png"
+            sup_file.write_bytes(b"dummy image data")
+
+            unsup_file = Path(tmpdir) / "sample.bin"
+            unsup_file.write_bytes(b"dummy binary data")
+
+            # 1. Attempt deleting unsupported file
+            resp_unsup = await self.client.post("/api/vf-file-nodes/delete", json={"path": str(unsup_file)})
+            assert resp_unsup.status == 400
+            data_unsup = await resp_unsup.json()
+            assert data_unsup["success"] is False
+            assert unsup_file.exists()
+
+            # 2. Deleting supported file
+            resp_sup = await self.client.post("/api/vf-file-nodes/delete", json={"path": str(sup_file)})
+            assert resp_sup.status == 200
+            data_sup = await resp_sup.json()
+            assert data_sup["success"] is True
+            assert not sup_file.exists()
+
+            # 3. Deleting non-existent file
+            resp_none = await self.client.post("/api/vf-file-nodes/delete", json={"path": str(sup_file)})
+            assert resp_none.status == 404
