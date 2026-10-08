@@ -18,6 +18,11 @@ export class VFFileBrowserModal {
       savedThumbs = localStorage.getItem("vf_file_nodes_show_thumbnails") !== "false";
     } catch (e) {}
     this.showThumbnails = savedThumbs;
+    let savedLayout = "grid";
+    try {
+      savedLayout = localStorage.getItem("vf_file_nodes_layout_mode") || "grid";
+    } catch (e) {}
+    this.layoutMode = savedLayout;
 
     this.favorites = [];
     this.drives = [];
@@ -244,6 +249,16 @@ export class VFFileBrowserModal {
     this.thumbToggleBtn.style.color = this.showThumbnails ? "#fff" : "#888";
     this.thumbToggleBtn.style.borderColor = this.showThumbnails ? "#0077ee" : "#3c3c4c";
     this.thumbToggleBtn.title = this.showThumbnails ? "Thumbnails: ON (click to hide)" : "Thumbnails: OFF (click to show)";
+  }
+
+  updateLayoutToggleBtn() {
+    if (!this.layoutToggleBtn) return;
+    const isMosaic = this.layoutMode === "mosaic";
+    this.layoutToggleBtn.innerHTML = isMosaic ? icon("mosaic") : icon("grid");
+    this.layoutToggleBtn.style.background = isMosaic ? "#0066cc" : "#262632";
+    this.layoutToggleBtn.style.color = isMosaic ? "#fff" : "#888";
+    this.layoutToggleBtn.style.borderColor = isMosaic ? "#0077ee" : "#3c3c4c";
+    this.layoutToggleBtn.title = isMosaic ? "Layout: Mosaic (click for Grid)" : "Layout: Grid (click for Mosaic)";
   }
 
   async loadDirectory(dirPath) {
@@ -483,12 +498,37 @@ export class VFFileBrowserModal {
       this.renderFiles();
     };
 
+    this.layoutToggleBtn = createElement("button");
+    Object.assign(this.layoutToggleBtn.style, {
+      background: this.layoutMode === "mosaic" ? "#0066cc" : "#262632",
+      color: this.layoutMode === "mosaic" ? "#fff" : "#888",
+      border: `1px solid ${this.layoutMode === "mosaic" ? "#0077ee" : "#3c3c4c"}`,
+      borderRadius: "4px",
+      padding: "5px 8px",
+      fontSize: "13px",
+      lineHeight: "1.2",
+      cursor: "pointer",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+    });
+    this.updateLayoutToggleBtn();
+    this.layoutToggleBtn.onclick = () => {
+      this.layoutMode = this.layoutMode === "grid" ? "mosaic" : "grid";
+      try {
+        localStorage.setItem("vf_file_nodes_layout_mode", this.layoutMode);
+      } catch (e) {}
+      this.updateLayoutToggleBtn();
+      this.renderFiles();
+    };
+
     navBar.appendChild(this.driveSelect);
     navBar.appendChild(upBtn);
     navBar.appendChild(this.favBtn);
     navBar.appendChild(this.pathInput);
     navBar.appendChild(this.sortSelect);
     navBar.appendChild(this.thumbToggleBtn);
+    navBar.appendChild(this.layoutToggleBtn);
     navBar.appendChild(searchInput);
     dialog.appendChild(navBar);
 
@@ -630,7 +670,21 @@ export class VFFileBrowserModal {
 
   renderFiles() {
     this.fileListEl.innerHTML = "";
-    this.fileListEl.style.gridAutoRows = this.showThumbnails ? "140px" : "100px";
+    const isMosaic = this.layoutMode === "mosaic";
+
+    if (isMosaic) {
+      this.fileListEl.style.display = "block";
+      this.fileListEl.style.columnWidth = "140px";
+      this.fileListEl.style.columnGap = "10px";
+      this.fileListEl.style.gridTemplateColumns = "";
+      this.fileListEl.style.gridAutoRows = "";
+    } else {
+      this.fileListEl.style.display = "grid";
+      this.fileListEl.style.gridTemplateColumns = "repeat(auto-fill, minmax(130px, 1fr))";
+      this.fileListEl.style.gridAutoRows = this.showThumbnails ? "140px" : "100px";
+      this.fileListEl.style.columnWidth = "";
+      this.fileListEl.style.columnGap = "";
+    }
 
     // Folders first
     this.dirs.forEach((dirName) => {
@@ -649,6 +703,10 @@ export class VFFileBrowserModal {
         textAlign: "center",
         gap: "6px",
         userSelect: "none",
+        breakInside: isMosaic ? "avoid" : "auto",
+        marginBottom: isMosaic ? "10px" : "0",
+        boxSizing: "border-box",
+        width: isMosaic ? "100%" : "auto",
       });
       card.innerHTML = `<div style="font-size: 28px;">📁</div>
         <div style="font-size: 11px; font-weight: 500; word-break: break-word; line-height: 1.2; max-height: 2.4em; overflow: hidden;">${dirName}</div>`;
@@ -673,16 +731,23 @@ export class VFFileBrowserModal {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "space-between",
+        justifyContent: isMosaic ? "flex-start" : "space-between",
+        gap: isMosaic ? "6px" : "0",
         cursor: "pointer",
         position: "relative",
         userSelect: "none",
+        breakInside: isMosaic ? "avoid" : "auto",
+        marginBottom: isMosaic ? "10px" : "0",
+        boxSizing: "border-box",
+        width: isMosaic ? "100%" : "auto",
       });
 
       const previewContainer = createElement("div");
       Object.assign(previewContainer.style, {
         width: "100%",
-        height: this.showThumbnails ? "85px" : "55px",
+        height: isMosaic ? (this.showThumbnails ? "auto" : "55px") : (this.showThumbnails ? "85px" : "55px"),
+        minHeight: isMosaic && this.showThumbnails ? "45px" : "",
+        maxHeight: isMosaic && this.showThumbnails ? "260px" : "",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -696,8 +761,10 @@ export class VFFileBrowserModal {
         img.src = `/api/vf-file-nodes/thumbnail?path=${encodeURIComponent(file.path)}`;
         Object.assign(img.style, {
           width: "100%",
-          height: "100%",
-          objectFit: "cover",
+          height: isMosaic ? "auto" : "100%",
+          maxHeight: isMosaic ? "260px" : "",
+          objectFit: isMosaic ? "contain" : "cover",
+          display: "block",
         });
         img.onerror = () => {
           previewContainer.innerHTML = `<span style="font-size: 24px;">${file.media_type === "image" ? "🖼️" : "🎬"}</span>`;
@@ -716,7 +783,7 @@ export class VFFileBrowserModal {
       const label = createElement("div", "", file.name);
       Object.assign(label.style, {
         fontSize: "11px",
-        marginTop: "4px",
+        marginTop: isMosaic ? "0" : "4px",
         textAlign: "center",
         wordBreak: "break-word",
         maxHeight: "2.4em",

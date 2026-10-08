@@ -89,6 +89,12 @@ class EmbeddedFileExplorer {
       savedThumbs = localStorage.getItem("vf_file_nodes_show_thumbnails") !== "false";
     } catch (e) {}
     this.showThumbnails = savedThumbs;
+
+    let savedLayout = "grid";
+    try {
+      savedLayout = localStorage.getItem("vf_file_nodes_layout_mode") || "grid";
+    } catch (e) {}
+    this.layoutMode = savedLayout;
   }
 
   updateThumbToggleBtn() {
@@ -97,6 +103,16 @@ class EmbeddedFileExplorer {
     this.thumbToggleBtn.style.color = this.showThumbnails ? "#fff" : "#888";
     this.thumbToggleBtn.style.borderColor = this.showThumbnails ? "#0077ee" : "#3c3c4c";
     this.thumbToggleBtn.title = this.showThumbnails ? "Thumbnails: ON (click to hide)" : "Thumbnails: OFF (click to show)";
+  }
+
+  updateLayoutToggleBtn() {
+    if (!this.layoutToggleBtn) return;
+    const isMosaic = this.layoutMode === "mosaic";
+    this.layoutToggleBtn.innerHTML = isMosaic ? icon("mosaic") : icon("grid");
+    this.layoutToggleBtn.style.background = isMosaic ? "#0066cc" : "#282834";
+    this.layoutToggleBtn.style.color = isMosaic ? "#fff" : "#888";
+    this.layoutToggleBtn.style.borderColor = isMosaic ? "#0077ee" : "#3c3c4c";
+    this.layoutToggleBtn.title = isMosaic ? "Layout: Mosaic (click for Grid)" : "Layout: Grid (click for Mosaic)";
   }
 
   async init() {
@@ -517,8 +533,33 @@ class EmbeddedFileExplorer {
       this.renderGrid();
     };
 
+    this.layoutToggleBtn = createElement("button");
+    Object.assign(this.layoutToggleBtn.style, {
+      background: this.layoutMode === "mosaic" ? "#0066cc" : "#282834",
+      color: this.layoutMode === "mosaic" ? "#fff" : "#888",
+      border: `1px solid ${this.layoutMode === "mosaic" ? "#0077ee" : "#3c3c4c"}`,
+      borderRadius: "3px",
+      padding: "3px 6px",
+      fontSize: "12px",
+      lineHeight: "1.2",
+      cursor: "pointer",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+    });
+    this.updateLayoutToggleBtn();
+    this.layoutToggleBtn.onclick = () => {
+      this.layoutMode = this.layoutMode === "grid" ? "mosaic" : "grid";
+      try {
+        localStorage.setItem("vf_file_nodes_layout_mode", this.layoutMode);
+      } catch (e) {}
+      this.updateLayoutToggleBtn();
+      this.renderGrid();
+    };
+
     rightControls.appendChild(this.sortSelect);
     rightControls.appendChild(this.thumbToggleBtn);
+    rightControls.appendChild(this.layoutToggleBtn);
     rightControls.appendChild(searchInput);
 
     filterBar.appendChild(tabsContainer);
@@ -644,12 +685,26 @@ class EmbeddedFileExplorer {
 
   renderGrid() {
     this.fileGridEl.innerHTML = "";
-    this.fileGridEl.style.gridAutoRows = this.showThumbnails ? "120px" : "85px";
+    const isMosaic = this.layoutMode === "mosaic";
+
+    if (isMosaic) {
+      this.fileGridEl.style.display = "block";
+      this.fileGridEl.style.columnWidth = "120px";
+      this.fileGridEl.style.columnGap = "8px";
+      this.fileGridEl.style.gridTemplateColumns = "";
+      this.fileGridEl.style.gridAutoRows = "";
+    } else {
+      this.fileGridEl.style.display = "grid";
+      this.fileGridEl.style.gridTemplateColumns = "repeat(auto-fill, minmax(110px, 1fr))";
+      this.fileGridEl.style.gridAutoRows = this.showThumbnails ? "120px" : "85px";
+      this.fileGridEl.style.columnWidth = "";
+      this.fileGridEl.style.columnGap = "";
+    }
 
     // Folders
     this.dirs.forEach((dirName) => {
       if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return;
-      const card = createElement("div");
+      const card = createElement("div", "vf-card-dir");
       Object.assign(card.style, {
         background: "#1f1f28",
         border: "1px solid #2d2d3c",
@@ -662,6 +717,10 @@ class EmbeddedFileExplorer {
         cursor: "pointer",
         textAlign: "center",
         gap: "4px",
+        breakInside: isMosaic ? "avoid" : "auto",
+        marginBottom: isMosaic ? "8px" : "0",
+        boxSizing: "border-box",
+        width: isMosaic ? "100%" : "auto",
       });
       card.innerHTML = `<span style="font-size: 24px;">📁</span>
         <span style="font-size: 10px; font-weight: 500; word-break: break-word; line-height: 1.2; max-height: 2.4em; overflow: hidden;">${dirName}</span>`;
@@ -676,7 +735,7 @@ class EmbeddedFileExplorer {
     // Files
     this.files.forEach((file) => {
       if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return;
-      const card = createElement("div");
+      const card = createElement("div", "vf-card-file");
       card.draggable = true;
       Object.assign(card.style, {
         background: "#1f1f28",
@@ -686,9 +745,14 @@ class EmbeddedFileExplorer {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "space-between",
+        justifyContent: isMosaic ? "flex-start" : "space-between",
+        gap: isMosaic ? "6px" : "0",
         cursor: "pointer",
         position: "relative",
+        breakInside: isMosaic ? "avoid" : "auto",
+        marginBottom: isMosaic ? "8px" : "0",
+        boxSizing: "border-box",
+        width: isMosaic ? "100%" : "auto",
       });
 
       card.ondragstart = (e) => {
@@ -698,7 +762,9 @@ class EmbeddedFileExplorer {
       const thumb = createElement("div");
       Object.assign(thumb.style, {
         width: "100%",
-        height: this.showThumbnails ? "70px" : "45px",
+        height: isMosaic ? (this.showThumbnails ? "auto" : "45px") : (this.showThumbnails ? "70px" : "45px"),
+        minHeight: isMosaic && this.showThumbnails ? "40px" : "",
+        maxHeight: isMosaic && this.showThumbnails ? "240px" : "",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -710,7 +776,13 @@ class EmbeddedFileExplorer {
       if (this.showThumbnails && (file.media_type === "image" || file.media_type === "video")) {
         const img = document.createElement("img");
         img.src = `/api/vf-file-nodes/thumbnail?path=${encodeURIComponent(file.path)}`;
-        Object.assign(img.style, { width: "100%", height: "100%", objectFit: "cover" });
+        Object.assign(img.style, {
+          width: "100%",
+          height: isMosaic ? "auto" : "100%",
+          maxHeight: isMosaic ? "240px" : "",
+          objectFit: isMosaic ? "contain" : "cover",
+          display: "block",
+        });
         img.onerror = () => {
           thumb.innerHTML = `<span style="font-size: 22px;">${file.media_type === "image" ? "🖼️" : "🎬"}</span>`;
         };
@@ -740,7 +812,7 @@ class EmbeddedFileExplorer {
       card.appendChild(label);
 
       card.onclick = () => {
-        this.fileGridEl.querySelectorAll("div").forEach((c) => {
+        this.fileGridEl.querySelectorAll(".vf-card-file").forEach((c) => {
           c.style.borderColor = "#2d2d3c";
           c.style.background = "#1f1f28";
         });
