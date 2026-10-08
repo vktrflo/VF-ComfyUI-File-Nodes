@@ -1,0 +1,19 @@
+[project]
+name = "vf-comfyui-file-nodes"
+version = "1.0.0"
+description = "High performance file loading, browsing, and media nodes for ComfyUI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+    "Pillow",
+    "av>=10.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/vktrflo/VF-ComfyUI-File-Nodes"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
