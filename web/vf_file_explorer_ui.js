@@ -7,6 +7,7 @@ import { app } from "../../scripts/app.js";
 import { setupDragPayload } from "./vf_canvas_drop.js";
 import {
   createElement,
+  createEmptyMessageEl,
   ensureSpinnerStyles,
   formatDateTime,
   formatDuration,
@@ -582,10 +583,9 @@ class EmbeddedFileExplorer {
       overflowY: "auto",
       overflowX: "hidden",
       padding: "10px",
-      display: "grid",
-      gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-      gridAutoRows: "120px",
-      gap: "8px",
+      display: "flex",
+      flexDirection: "column",
+      gap: "10px",
       background: "#14141a",
       boxSizing: "border-box",
     });
@@ -715,60 +715,6 @@ class EmbeddedFileExplorer {
     this.fileGridEl.innerHTML = "";
     const isMosaic = this.layoutMode === "mosaic";
 
-    let cols = null;
-    let numCols = 1;
-    let itemIdx = 0;
-
-    if (isMosaic) {
-      const minColWidth = 120;
-      const gap = 8;
-      const availableWidth = this.fileGridEl.clientWidth || (this.container.clientWidth ? this.container.clientWidth - 20 : DEFAULT_WIDTH);
-      numCols = Math.max(1, Math.floor((availableWidth + gap) / (minColWidth + gap)));
-      this._currentCols = numCols;
-
-      this.fileGridEl.style.display = "flex";
-      this.fileGridEl.style.flexDirection = "row";
-      this.fileGridEl.style.alignItems = "flex-start";
-      this.fileGridEl.style.gap = `${gap}px`;
-      this.fileGridEl.style.overflowY = "auto";
-      this.fileGridEl.style.overflowX = "hidden";
-      this.fileGridEl.style.gridTemplateColumns = "";
-      this.fileGridEl.style.gridAutoRows = "";
-
-      cols = [];
-      for (let i = 0; i < numCols; i++) {
-        const col = createElement("div", "vf-mosaic-col");
-        Object.assign(col.style, {
-          flex: "1",
-          minWidth: "0",
-          display: "flex",
-          flexDirection: "column",
-          gap: `${gap}px`,
-        });
-        this.fileGridEl.appendChild(col);
-        cols.push(col);
-      }
-    } else {
-      this._currentCols = null;
-      this.fileGridEl.style.display = "grid";
-      this.fileGridEl.style.gridTemplateColumns = "repeat(auto-fill, minmax(110px, 1fr))";
-      this.fileGridEl.style.gridAutoRows = this.showThumbnails ? "120px" : "85px";
-      this.fileGridEl.style.flexDirection = "";
-      this.fileGridEl.style.alignItems = "";
-      this.fileGridEl.style.gap = "8px";
-      this.fileGridEl.style.overflowY = "auto";
-      this.fileGridEl.style.overflowX = "hidden";
-    }
-
-    const appendItem = (card) => {
-      if (isMosaic && cols) {
-        cols[itemIdx % numCols].appendChild(card);
-        itemIdx++;
-      } else {
-        this.fileGridEl.appendChild(card);
-      }
-    };
-
     // Filter visible items
     const visibleDirs = this.dirs.filter((dirName) => {
       if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return false;
@@ -779,6 +725,98 @@ class EmbeddedFileExplorer {
       if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return false;
       return true;
     });
+
+    // 1. Both empty: center the empty state message
+    if (visibleDirs.length === 0 && visibleFiles.length === 0) {
+      Object.assign(this.fileGridEl.style, {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        overflowY: "auto",
+        overflowX: "hidden",
+        padding: "10px",
+        gap: "0",
+        gridTemplateColumns: "",
+        gridAutoRows: "",
+      });
+      const emptyInfo = getEmptyFolderMessage(this.activeFilter, this.searchQuery, false);
+      const emptyEl = createEmptyMessageEl(emptyInfo);
+      this.fileGridEl.appendChild(emptyEl);
+      return;
+    }
+
+    // 2. Normal scrollable container layout (vertical flow)
+    Object.assign(this.fileGridEl.style, {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "stretch",
+      justifyContent: "flex-start",
+      gap: "10px",
+      overflowY: "auto",
+      overflowX: "hidden",
+      padding: "10px",
+      gridTemplateColumns: "",
+      gridAutoRows: "",
+    });
+
+    let appendItem;
+    if (isMosaic) {
+      const minColWidth = 120;
+      const gap = 8;
+      const availableWidth = this.fileGridEl.clientWidth || (this.container.clientWidth ? this.container.clientWidth - 20 : DEFAULT_WIDTH);
+      const numCols = Math.max(1, Math.floor((availableWidth + gap) / (minColWidth + gap)));
+      this._currentCols = numCols;
+
+      const mosaicWrapper = createElement("div", "vf-mosaic-wrapper");
+      Object.assign(mosaicWrapper.style, {
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: `${gap}px`,
+        width: "100%",
+        boxSizing: "border-box",
+      });
+
+      const cols = [];
+      for (let i = 0; i < numCols; i++) {
+        const col = createElement("div", "vf-mosaic-col");
+        Object.assign(col.style, {
+          flex: "1",
+          minWidth: "0",
+          display: "flex",
+          flexDirection: "column",
+          gap: `${gap}px`,
+        });
+        mosaicWrapper.appendChild(col);
+        cols.push(col);
+      }
+
+      let itemIdx = 0;
+      appendItem = (card) => {
+        cols[itemIdx % numCols].appendChild(card);
+        itemIdx++;
+      };
+
+      this.fileGridEl.appendChild(mosaicWrapper);
+    } else {
+      this._currentCols = null;
+      const contentGrid = createElement("div", "vf-grid-content");
+      Object.assign(contentGrid.style, {
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+        gridAutoRows: this.showThumbnails ? "120px" : "85px",
+        gap: "8px",
+        width: "100%",
+        boxSizing: "border-box",
+      });
+
+      appendItem = (card) => {
+        contentGrid.appendChild(card);
+      };
+
+      this.fileGridEl.appendChild(contentGrid);
+    }
 
     // Folders
     visibleDirs.forEach((dirName) => {
@@ -976,34 +1014,13 @@ class EmbeddedFileExplorer {
       appendItem(card);
     });
 
-    // Friendly empty message if no files to view
+    // Friendly empty message if no files to view (placed BELOW the folders!)
     if (visibleFiles.length === 0) {
       const emptyInfo = getEmptyFolderMessage(this.activeFilter, this.searchQuery, visibleDirs.length > 0);
-      const emptyEl = createElement("div", "vf-empty-folder-message");
+      const emptyEl = createEmptyMessageEl(emptyInfo);
       Object.assign(emptyEl.style, {
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "32px 16px",
-        color: "#888",
-        textAlign: "center",
-        width: "100%",
-        boxSizing: "border-box",
-        userSelect: "none",
-        gridColumn: isMosaic ? "" : "1 / -1",
+        padding: "24px 16px",
       });
-      emptyEl.innerHTML = `
-        <div style="font-size: 32px; margin-bottom: 8px; opacity: 0.5;">${emptyInfo.icon}</div>
-        <div style="font-size: 13px; font-weight: 500; color: #bbb;">${emptyInfo.title}</div>
-        <div style="font-size: 11px; margin-top: 4px; color: #777;">${emptyInfo.subtitle}</div>
-      `;
-      if (isMosaic && visibleDirs.length === 0) {
-        this.fileGridEl.style.display = "flex";
-        this.fileGridEl.style.flexDirection = "column";
-        this.fileGridEl.style.alignItems = "center";
-        this.fileGridEl.style.justifyContent = "center";
-      }
       this.fileGridEl.appendChild(emptyEl);
     }
   }

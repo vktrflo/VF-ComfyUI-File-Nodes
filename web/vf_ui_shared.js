@@ -182,3 +182,25 @@ export function getEmptyFolderMessage(filter = "all", searchQuery = "", hasDirs 
     icon: "📁",
   };
 }
+
+export function createEmptyMessageEl(emptyInfo) {
+  const emptyEl = createElement("div", "vf-empty-folder-message");
+  Object.assign(emptyEl.style, {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "32px 16px",
+    color: "#888",
+    textAlign: "center",
+    width: "100%",
+    boxSizing: "border-box",
+    userSelect: "none",
+  });
+  emptyEl.innerHTML = `
+    <div style="font-size: 32px; margin-bottom: 8px; opacity: 0.5;">${emptyInfo.icon}</div>
+    <div style="font-size: 13px; font-weight: 500; color: #bbb;">${emptyInfo.title}</div>
+    <div style="font-size: 11px; margin-top: 4px; color: #777;">${emptyInfo.subtitle}</div>
+  `;
+  return emptyEl;
+}

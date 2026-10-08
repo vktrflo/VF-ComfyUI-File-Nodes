@@ -5,6 +5,7 @@
 import { api } from "../../scripts/api.js";
 import {
   createElement,
+  createEmptyMessageEl,
   formatDateTime,
   formatDuration,
   getEmptyFolderMessage,
@@ -560,9 +561,8 @@ export class VFFileBrowserModal {
       overflowY: "auto",
       overflowX: "hidden",
       padding: "12px 16px",
-      display: "grid",
-      gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))",
-      gridAutoRows: "145px",
+      display: "flex",
+      flexDirection: "column",
       gap: "10px",
       background: "#16161c",
       boxSizing: "border-box",
@@ -700,60 +700,6 @@ export class VFFileBrowserModal {
     this.fileListEl.innerHTML = "";
     const isMosaic = this.layoutMode === "mosaic";
 
-    let cols = null;
-    let numCols = 1;
-    let itemIdx = 0;
-
-    if (isMosaic) {
-      const minColWidth = 140;
-      const gap = 10;
-      const availableWidth = this.fileListEl.clientWidth || 780;
-      numCols = Math.max(1, Math.floor((availableWidth + gap) / (minColWidth + gap)));
-      this._currentCols = numCols;
-
-      this.fileListEl.style.display = "flex";
-      this.fileListEl.style.flexDirection = "row";
-      this.fileListEl.style.alignItems = "flex-start";
-      this.fileListEl.style.gap = `${gap}px`;
-      this.fileListEl.style.overflowY = "auto";
-      this.fileListEl.style.overflowX = "hidden";
-      this.fileListEl.style.gridTemplateColumns = "";
-      this.fileListEl.style.gridAutoRows = "";
-
-      cols = [];
-      for (let i = 0; i < numCols; i++) {
-        const col = createElement("div", "vf-mosaic-col");
-        Object.assign(col.style, {
-          flex: "1",
-          minWidth: "0",
-          display: "flex",
-          flexDirection: "column",
-          gap: `${gap}px`,
-        });
-        this.fileListEl.appendChild(col);
-        cols.push(col);
-      }
-    } else {
-      this._currentCols = null;
-      this.fileListEl.style.display = "grid";
-      this.fileListEl.style.gridTemplateColumns = "repeat(auto-fill, minmax(130px, 1fr))";
-      this.fileListEl.style.gridAutoRows = this.showThumbnails ? "145px" : "105px";
-      this.fileListEl.style.flexDirection = "";
-      this.fileListEl.style.alignItems = "";
-      this.fileListEl.style.gap = "10px";
-      this.fileListEl.style.overflowY = "auto";
-      this.fileListEl.style.overflowX = "hidden";
-    }
-
-    const appendItem = (card) => {
-      if (isMosaic && cols) {
-        cols[itemIdx % numCols].appendChild(card);
-        itemIdx++;
-      } else {
-        this.fileListEl.appendChild(card);
-      }
-    };
-
     // Filter visible items
     const visibleDirs = this.dirs.filter((dirName) => {
       if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return false;
@@ -764,6 +710,98 @@ export class VFFileBrowserModal {
       if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return false;
       return true;
     });
+
+    // 1. Both empty: center the empty state message
+    if (visibleDirs.length === 0 && visibleFiles.length === 0) {
+      Object.assign(this.fileListEl.style, {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        overflowY: "auto",
+        overflowX: "hidden",
+        padding: "12px 16px",
+        gap: "0",
+        gridTemplateColumns: "",
+        gridAutoRows: "",
+      });
+      const emptyInfo = getEmptyFolderMessage(this.filter, this.searchQuery, false);
+      const emptyEl = createEmptyMessageEl(emptyInfo);
+      this.fileListEl.appendChild(emptyEl);
+      return;
+    }
+
+    // 2. Normal scrollable container layout (vertical flow)
+    Object.assign(this.fileListEl.style, {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "stretch",
+      justifyContent: "flex-start",
+      gap: "10px",
+      overflowY: "auto",
+      overflowX: "hidden",
+      padding: "12px 16px",
+      gridTemplateColumns: "",
+      gridAutoRows: "",
+    });
+
+    let appendItem;
+    if (isMosaic) {
+      const minColWidth = 140;
+      const gap = 10;
+      const availableWidth = this.fileListEl.clientWidth || 780;
+      const numCols = Math.max(1, Math.floor((availableWidth + gap) / (minColWidth + gap)));
+      this._currentCols = numCols;
+
+      const mosaicWrapper = createElement("div", "vf-mosaic-wrapper");
+      Object.assign(mosaicWrapper.style, {
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: `${gap}px`,
+        width: "100%",
+        boxSizing: "border-box",
+      });
+
+      const cols = [];
+      for (let i = 0; i < numCols; i++) {
+        const col = createElement("div", "vf-mosaic-col");
+        Object.assign(col.style, {
+          flex: "1",
+          minWidth: "0",
+          display: "flex",
+          flexDirection: "column",
+          gap: `${gap}px`,
+        });
+        mosaicWrapper.appendChild(col);
+        cols.push(col);
+      }
+
+      let itemIdx = 0;
+      appendItem = (card) => {
+        cols[itemIdx % numCols].appendChild(card);
+        itemIdx++;
+      };
+
+      this.fileListEl.appendChild(mosaicWrapper);
+    } else {
+      this._currentCols = null;
+      const contentGrid = createElement("div", "vf-grid-content");
+      Object.assign(contentGrid.style, {
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))",
+        gridAutoRows: this.showThumbnails ? "145px" : "105px",
+        gap: "10px",
+        width: "100%",
+        boxSizing: "border-box",
+      });
+
+      appendItem = (card) => {
+        contentGrid.appendChild(card);
+      };
+
+      this.fileListEl.appendChild(contentGrid);
+    }
 
     // Folders first
     visibleDirs.forEach((dirName) => {
@@ -961,34 +999,13 @@ export class VFFileBrowserModal {
       appendItem(card);
     });
 
-    // Friendly empty message if no files to view
+    // Friendly empty message if no files to view (placed BELOW the folders!)
     if (visibleFiles.length === 0) {
       const emptyInfo = getEmptyFolderMessage(this.filter, this.searchQuery, visibleDirs.length > 0);
-      const emptyEl = createElement("div", "vf-empty-folder-message");
+      const emptyEl = createEmptyMessageEl(emptyInfo);
       Object.assign(emptyEl.style, {
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "32px 16px",
-        color: "#888",
-        textAlign: "center",
-        width: "100%",
-        boxSizing: "border-box",
-        userSelect: "none",
-        gridColumn: isMosaic ? "" : "1 / -1",
+        padding: "24px 16px",
       });
-      emptyEl.innerHTML = `
-        <div style="font-size: 32px; margin-bottom: 8px; opacity: 0.5;">${emptyInfo.icon}</div>
-        <div style="font-size: 13px; font-weight: 500; color: #bbb;">${emptyInfo.title}</div>
-        <div style="font-size: 11px; margin-top: 4px; color: #777;">${emptyInfo.subtitle}</div>
-      `;
-      if (isMosaic && visibleDirs.length === 0) {
-        this.fileListEl.style.display = "flex";
-        this.fileListEl.style.flexDirection = "column";
-        this.fileListEl.style.alignItems = "center";
-        this.fileListEl.style.justifyContent = "center";
-      }
       this.fileListEl.appendChild(emptyEl);
     }
   }
