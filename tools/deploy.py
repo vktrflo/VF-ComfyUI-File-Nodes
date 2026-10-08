@@ -9,7 +9,7 @@ SOURCE_DIR = Path(__file__).resolve().parent.parent
 TARGET_DIR = Path(r"E:\comfyui_instances\SMALL_DESKTOP\ComfyUI\custom_nodes\VF-ComfyUI-File-Nodes")
 
 IGNORE_PATTERNS = shutil.ignore_patterns(
-    ".git", ".pytest_cache", ".venv", "__pycache__", "*.pyc", "tests", "tools"
+    ".git", ".pytest_cache", ".venv", "__pycache__", "*.pyc", "*.egg-info", "uv.lock", "tests", "tools"
 )
 
 def deploy() -> None:
@@ -22,7 +22,7 @@ def deploy() -> None:
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
 
     for item in SOURCE_DIR.iterdir():
-        if item.name in (".git", ".pytest_cache", ".venv", "__pycache__", "tests", "tools"):
+        if item.name in (".git", ".pytest_cache", ".venv", "__pycache__", "tests", "tools", "uv.lock") or item.name.endswith(".egg-info"):
             continue
         dest = TARGET_DIR / item.name
         if item.is_dir():
