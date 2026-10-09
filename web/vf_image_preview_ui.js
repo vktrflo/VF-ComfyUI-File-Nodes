@@ -14,6 +14,11 @@ export function setupLoadImageNode(nodeType, nodeData) {
     const res = origOnNodeCreated ? origOnNodeCreated.apply(this, arguments) : undefined;
     const node = this;
 
+    // MaskEditor and image preview compatibility properties
+    node.previewMediaType = "image";
+    node.imageIndex = 0;
+    node.imgs = [];
+
     // Set initial size
     node.size = [
       Math.max(node.size?.[0] || 0, DEFAULT_WIDTH),
@@ -25,6 +30,28 @@ export function setupLoadImageNode(nodeType, nodeData) {
 
       const imagePathWidget = node.widgets?.find((w) => w.name === "image_path");
       const longestSizeWidget = node.widgets?.find((w) => w.name === "longest_size");
+
+      // Add hidden "image" widget alias for MaskEditor saver writeback compatibility
+      let imageWidget = node.widgets?.find((w) => w.name === "image");
+      if (!imageWidget) {
+        imageWidget = {
+          name: "image",
+          type: "hidden",
+          value: "",
+          options: { serialize: false },
+          computeSize: () => [0, -4],
+          callback: function (val) {
+            setTimeout(() => {
+              if (val && imagePathWidget) {
+                imagePathWidget.value = val;
+                imagePathWidget.callback?.(val);
+              }
+            }, 0);
+          },
+        };
+        node.widgets = node.widgets || [];
+        node.widgets.push(imageWidget);
+      }
 
       // 1. Add "Browse Files" button
       if (imagePathWidget && !node.widgets?.some((w) => w._vfBrowseBtn)) {
@@ -111,12 +138,32 @@ export function setupLoadImageNode(nodeType, nodeData) {
           if (!path) {
             imgEl.style.display = "none";
             badgeEl.style.display = "none";
+            node.imgs = [];
+            if (imageWidget) imageWidget.value = "";
             return;
           }
 
-          imgEl.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(path)}`;
+          const filename = path.split(/[/\\]/).pop() || "image.png";
+          imgEl.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(path)}&filename=${encodeURIComponent(filename)}&type=input`;
+          node.imgs = [imgEl];
+          node.imageIndex = 0;
+          node.previewMediaType = "image";
+
+          // Sync hidden image widget only if it's an annotated/clipspace path
+          if (imageWidget) {
+            if (path.includes("clipspace") || path.endsWith("[input]") || path.endsWith("[temp]") || path.endsWith("[output]")) {
+              imageWidget.value = path;
+            } else {
+              imageWidget.value = "";
+            }
+          }
+
           imgEl.style.display = "block";
           imgEl.onload = () => {
+            node.imgs = [imgEl];
+            node.imageIndex = 0;
+            node.previewMediaType = "image";
+
             const origW = imgEl.naturalWidth;
             const origH = imgEl.naturalHeight;
             const longest = parseInt(longestSizeWidget?.value) || 0;
@@ -149,6 +196,7 @@ export function setupLoadImageNode(nodeType, nodeData) {
             node.setDirtyCanvas(true, true);
           };
           imgEl.onerror = () => {
+            node.imgs = [];
             imgEl.style.display = "none";
             badgeEl.style.display = "none";
           };
@@ -157,6 +205,7 @@ export function setupLoadImageNode(nodeType, nodeData) {
         if (imagePathWidget) {
           const origCb = imagePathWidget.callback;
           imagePathWidget.callback = function (v) {
+            node.images = undefined;
             origCb?.apply(this, arguments);
             updatePreview();
           };
@@ -220,6 +269,8 @@ export function setupLoadImageNode(nodeType, nodeData) {
   const origOnConfigure = nodeType.prototype.onConfigure;
   nodeType.prototype.onConfigure = function () {
     const res = origOnConfigure ? origOnConfigure.apply(this, arguments) : undefined;
+    this.previewMediaType = "image";
+    this.imageIndex = 0;
     if (Array.isArray(this.size)) {
       if (this.size[0] < DEFAULT_WIDTH) this.size[0] = DEFAULT_WIDTH;
       if (this.size[1] < DEFAULT_HEIGHT) this.size[1] = DEFAULT_HEIGHT;
@@ -232,6 +283,36 @@ export function setupLoadImageNode(nodeType, nodeData) {
   nodeType.prototype.onResize = function (size) {
     const res = origOnResize ? origOnResize.apply(this, arguments) : undefined;
     this._vfUpdateImageWidgetDimensions?.();
+    return res;
+  };
+
+  const origGetExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
+  nodeType.prototype.getExtraMenuOptions = function (_, options) {
+    const res = origGetExtraMenuOptions ? origGetExtraMenuOptions.apply(this, arguments) : undefined;
+    if (this.imgs?.length) {
+      const hasMaskEditor = options?.some(
+        (opt) => opt && (
+          opt.content?.includes("MaskEditor") || 
+          opt.content?.includes("Mask Editor") ||
+          opt.label?.includes("Mask Editor")
+        )
+      );
+      if (!hasMaskEditor && Array.isArray(options)) {
+        options.push({
+          content: "Open in MaskEditor | Image Canvas",
+          callback: () => {
+            if (window.app?.openMaskEditor) {
+              window.app.openMaskEditor(this);
+            } else if (window.app?.extensionManager?.command?.execute) {
+              if (window.app.canvas) {
+                window.app.canvas.selected_nodes = { [this.id]: this };
+              }
+              window.app.extensionManager.command.execute("Comfy.MaskEditor.OpenMaskEditor");
+            }
+          },
+        });
+      }
+    }
     return res;
   };
 }

@@ -46,3 +46,17 @@ def test_load_image(tmp_path):
     assert rh == 100
     assert rw == 50
     assert resized_img.shape == (1, 100, 50, 3)
+
+def test_resolve_file_path(tmp_path):
+    from vf_file_nodes.media_utils import resolve_file_path
+
+    # 1. Empty path
+    assert resolve_file_path("") == ""
+
+    # 2. Existing regular file
+    img_file = tmp_path / "test.png"
+    img_file.write_bytes(b"png data")
+    assert resolve_file_path(str(img_file)) == str(img_file)
+
+    # 3. Non-existent unannotated path returns as-is
+    assert resolve_file_path("nonexistent.png") == "nonexistent.png"
