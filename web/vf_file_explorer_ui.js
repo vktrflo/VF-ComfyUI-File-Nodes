@@ -4,7 +4,7 @@
 
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
-import { setupDragPayload } from "./vf_canvas_drop.js";
+import { clearDragPayload, setupDragPayload } from "./vf_canvas_drop.js";
 import {
   createElement,
   createEmptyMessageEl,
@@ -851,7 +851,7 @@ class EmbeddedFileExplorer {
     visibleFiles.forEach((file) => {
       const isSupported = isSupportedMediaFile(file);
       const card = createElement("div", "vf-card-file");
-      card.draggable = true;
+      card.draggable = isSupported;
       Object.assign(card.style, {
         background: "#1f1f28",
         border: "1px solid #2d2d3c",
@@ -862,14 +862,20 @@ class EmbeddedFileExplorer {
         alignItems: "center",
         justifyContent: isMosaic ? "flex-start" : "space-between",
         gap: isMosaic ? "4px" : "0",
-        cursor: "pointer",
+        cursor: isSupported ? "grab" : "pointer",
         position: "relative",
         boxSizing: "border-box",
         width: "100%",
+        userSelect: "none",
       });
 
       card.ondragstart = (e) => {
+        card.style.opacity = "0.5";
         setupDragPayload(e, file);
+      };
+      card.ondragend = () => {
+        card.style.opacity = "1";
+        clearDragPayload();
       };
 
       const thumb = createElement("div");
@@ -889,6 +895,7 @@ class EmbeddedFileExplorer {
 
       if (this.showThumbnails && (file.media_type === "image" || file.media_type === "video")) {
         const img = document.createElement("img");
+        img.draggable = false;
         img.src = `/api/vf-file-nodes/thumbnail?path=${encodeURIComponent(file.path)}`;
         Object.assign(img.style, {
           width: "100%",

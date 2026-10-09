@@ -19,7 +19,7 @@ app.registerExtension({
       id: "VF.FileNodes.EnableCanvasDrop",
       name: "🌀 VF File Nodes: Enable Canvas Drag & Drop Node Creation",
       type: "boolean",
-      defaultValue: false,
+      defaultValue: true,
       tooltip: "When enabled, dragging a file from VF File Explorer onto the canvas automatically creates an image, video, or audio loader node.",
     });
 
