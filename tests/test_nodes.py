@@ -61,6 +61,53 @@ def test_vf_load_image_contract():
     assert VFLoadImage.RETURN_TYPES == ("IMAGE", "MASK", "STRING", "INT", "INT")
     assert VFLoadImage.RETURN_NAMES == ("image", "mask", "path", "width", "height")
 
+def test_vf_load_image_execution(tmp_path, monkeypatch):
+    from PIL import Image
+    import sys
+
+    node = VFLoadImage()
+
+    # 1. Empty/missing path
+    img, mask, path, w, h = node.load("")
+    assert img.shape == (1, 64, 64, 3) or img.shape == (1, 512, 512, 3)
+    assert mask.shape == (1, 64, 64) or mask.shape == (1, 512, 512)
+    assert w == 512 and h == 512
+
+    # 2. Existing image file
+    test_img = tmp_path / "sample.png"
+    im = Image.new("RGBA", (120, 80), color=(100, 150, 200, 255))
+    im.save(test_img)
+
+    img, mask, path, w, h = node.load(str(test_img))
+    assert img.shape == (1, 80, 120, 3)
+    assert mask.shape == (1, 80, 120)
+    assert w == 120 and h == 80
+    assert path == str(test_img.resolve())
+
+    # IS_CHANGED
+    change_sig = VFLoadImage.IS_CHANGED(str(test_img))
+    assert change_sig.endswith(":0")
+
+    # 3. ComfyUI annotated filepath simulation (clipspace mask)
+    clip_file = tmp_path / "clipspace-mask-123.png"
+    im.save(clip_file)
+
+    class MockFolderPaths:
+        @staticmethod
+        def get_annotated_filepath(name):
+            if "clipspace-mask-123.png" in name:
+                return str(clip_file)
+            return name
+        @staticmethod
+        def get_input_directory():
+            return str(tmp_path)
+
+    monkeypatch.setitem(sys.modules, "folder_paths", MockFolderPaths)
+
+    img_ann, mask_ann, path_ann, w_ann, h_ann = node.load("clipspace-mask-123.png [input]")
+    assert img_ann.shape == (1, 80, 120, 3)
+    assert path_ann == str(clip_file.resolve())
+
 def test_vf_load_video_contract():
     assert VFLoadVideo.RETURN_TYPES == ("IMAGE", "IMAGE", "AUDIO", "VIDEO", "DICT", "INT", "INT", "STRING")
     assert VFLoadVideo.RETURN_NAMES == ("image", "single_frame", "audio", "video", "frame_info", "width", "height", "path")

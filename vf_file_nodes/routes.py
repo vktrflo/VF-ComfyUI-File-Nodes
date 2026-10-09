@@ -26,6 +26,7 @@ from .media_utils import (
     VIDEO_EXTENSIONS,
     classify_media_type,
     extract_comfy_parameters,
+    resolve_file_path,
 )
 
 try:
@@ -256,6 +257,16 @@ async def handle_resolve(request: web.Request) -> web.Response:
     if not raw_path:
         return web.json_response({"dir": "", "file": "", "filename": "", "exists": False})
 
+    res_path = resolve_file_path(raw_path)
+    if res_path and os.path.isfile(res_path):
+        cand = Path(res_path)
+        return web.json_response({
+            "dir": str(cand.parent),
+            "file": str(cand),
+            "filename": cand.name,
+            "exists": True,
+        })
+
     candidates: list[Path] = [Path(raw_path)]
     normalized = raw_path.replace("\\", "/").strip("/")
     lower = normalized.lower()
@@ -341,7 +352,7 @@ async def handle_list(request: web.Request) -> web.Response:
 
                         if include:
                             st = entry.stat()
-                            meta = get_media_metadata(entry.path, media_type, st)
+                            meta = await asyncio.to_thread(get_media_metadata, entry.path, media_type, st)
                             files.append({
                                 "name": entry.name,
                                 "path": entry.path,
@@ -391,7 +402,8 @@ async def handle_list(request: web.Request) -> web.Response:
 
 async def handle_thumbnail(request: web.Request) -> web.StreamResponse:
     """Generate or retrieve cached thumbnail image with offloaded worker threads."""
-    file_path = request.query.get("path", "")
+    raw_path = request.query.get("path", "")
+    file_path = resolve_file_path(raw_path)
     if not file_path or not os.path.isfile(file_path):
         return web.Response(status=404, text="File not found")
 
@@ -404,7 +416,7 @@ async def handle_thumbnail(request: web.Request) -> web.StreamResponse:
     # 1. Check in-memory cache
     cached = _THUMBNAIL_CACHE.get(file_path)
     if cached and cached[0] == mtime:
-        return web.Response(body=cached[1], content_type="image/jpeg")
+        return web.Response(body=cached[1], content_type="image/jpeg", headers={"Access-Control-Allow-Origin": "*"})
 
     media_type = classify_media_type(file_path)
     if media_type not in ("image", "video"):
@@ -420,7 +432,7 @@ async def handle_thumbnail(request: web.Request) -> web.StreamResponse:
             if len(_THUMBNAIL_CACHE) > MAX_THUMB_CACHE_SIZE:
                 _THUMBNAIL_CACHE.clear()
             _THUMBNAIL_CACHE[file_path] = (mtime, jpeg_bytes)
-            return web.Response(body=jpeg_bytes, content_type="image/jpeg")
+            return web.Response(body=jpeg_bytes, content_type="image/jpeg", headers={"Access-Control-Allow-Origin": "*"})
         except OSError:
             pass
 
@@ -433,19 +445,20 @@ async def handle_thumbnail(request: web.Request) -> web.StreamResponse:
         if len(_THUMBNAIL_CACHE) > MAX_THUMB_CACHE_SIZE:
             _THUMBNAIL_CACHE.clear()
         _THUMBNAIL_CACHE[file_path] = (mtime, jpeg_bytes)
-        return web.Response(body=jpeg_bytes, content_type="image/jpeg")
+        return web.Response(body=jpeg_bytes, content_type="image/jpeg", headers={"Access-Control-Allow-Origin": "*"})
     except Exception as exc:
         return web.Response(status=500, text=f"Thumbnail error: {exc}")
 
 
 async def handle_view(request: web.Request) -> web.StreamResponse:
     """Stream media file with HTTP Range support for video seeking."""
-    file_path = request.query.get("path", "")
+    raw_path = request.query.get("path", "")
+    file_path = resolve_file_path(raw_path)
     if not file_path or not os.path.isfile(file_path):
         return web.Response(status=404, text="File not found")
 
     # aiohttp web.FileResponse provides full HTTP 206 Range headers natively
-    return web.FileResponse(file_path)
+    return web.FileResponse(file_path, headers={"Access-Control-Allow-Origin": "*"})
 
 
 async def handle_delete(request: web.Request) -> web.Response:

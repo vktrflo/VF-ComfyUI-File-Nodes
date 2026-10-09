@@ -1,9 +1,36 @@
 import os
 from pathlib import Path
 import pytest
+import asyncio
+import threading
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 from vf_file_nodes.routes import setup_routes
+from vf_file_nodes import routes
+
+
+@pytest.mark.asyncio
+async def test_directory_metadata_does_not_block_server_loop(tmp_path, monkeypatch, aiohttp_client):
+    """The loop must keep running while a media probe waits for disk/network I/O."""
+    (tmp_path / "clip.mp4").write_bytes(b"placeholder")
+    loop = asyncio.get_running_loop()
+    loop_was_responsive = []
+
+    def slow_metadata(path, media_type, st):
+        tick = threading.Event()
+        loop.call_soon_threadsafe(tick.set)
+        loop_was_responsive.append(tick.wait(timeout=0.5))
+        return {"dimensions": [1920, 1080], "duration": 2.0}
+
+    monkeypatch.setattr(routes, "get_media_metadata", slow_metadata)
+    app = web.Application()
+    setup_routes(app)
+    client = await aiohttp_client(app)
+    response = await client.get("/api/vf-file-nodes/list", params={"path": str(tmp_path)})
+    data = await response.json()
+    assert loop_was_responsive == [True], "media metadata blocked the server event loop"
+    assert response.status == 200
+    assert data["files"][0]["dimensions"] == [1920, 1080]
 
 class TestFileNodesRoutes(AioHTTPTestCase):
     async def get_application(self):

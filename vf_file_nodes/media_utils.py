@@ -58,6 +58,45 @@ def classify_media_type(path: Path | str) -> str:
     return "unknown"
 
 
+def resolve_file_path(path: str | Path) -> str:
+    """Resolve a file path, supporting ComfyUI annotated paths (e.g. clipspace files)."""
+    path_str = str(path or "").strip()
+    if not path_str:
+        return ""
+    if os.path.isfile(path_str):
+        return path_str
+
+    try:
+        import folder_paths
+        if folder_paths is not None:
+            # 1. Direct annotated filepath resolution
+            try:
+                annotated = folder_paths.get_annotated_filepath(path_str)
+                if os.path.isfile(annotated):
+                    return annotated
+            except Exception:
+                pass
+
+            # 2. Check input/clipspace or input directory for clipspace masks
+            clean_name = path_str
+            for tag in ("[input]", "[output]", "[temp]"):
+                clean_name = clean_name.replace(tag, "").strip()
+
+            input_dir = folder_paths.get_input_directory()
+            if input_dir:
+                candidates = [
+                    os.path.join(input_dir, clean_name),
+                    os.path.join(input_dir, "clipspace", os.path.basename(clean_name)),
+                ]
+                for cand in candidates:
+                    if os.path.isfile(cand):
+                        return cand
+    except Exception:
+        pass
+
+    return path_str
+
+
 def empty_image_tensor(w: int = 512, h: int = 512) -> torch.Tensor:
     """Return a black image tensor [1, H, W, 3]."""
     return torch.zeros((1, max(1, h), max(1, w), 3), dtype=torch.float32)
@@ -313,9 +352,18 @@ def decode_video_segment(
         video_out = None
         if has_comfy_video_api and InputImpl is not None and Types is not None:
             try:
+                # SaveVideo uses 4:2:0 encoding, which requires even dimensions.
+                # Pad only VIDEO components; keep the image outputs and crop exact.
+                video_frames = tensor_frames
+                if final_w % 2 or final_h % 2:
+                    video_frames = F.pad(
+                        tensor_frames.permute(0, 3, 1, 2),
+                        (0, final_w % 2, 0, final_h % 2),
+                        mode="replicate",
+                    ).permute(0, 2, 3, 1).contiguous()
                 video_out = InputImpl.VideoFromComponents(
                     Types.VideoComponents(
-                        images=tensor_frames,
+                        images=video_frames,
                         audio=audio_dict,
                         frame_rate=Fraction(int(round(video_fps * 1000)), 1000),
                     ),
