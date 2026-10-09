@@ -32,6 +32,20 @@ function stopCanvasEvents(el) {
 
 export function setupFileExplorerNode(nodeType, nodeData) {
   const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+  const origOnResize = nodeType.prototype.onResize;
+  const origOnConfigure = nodeType.prototype.onConfigure;
+
+  nodeType.prototype.onResize = function (size) {
+    const res = origOnResize ? origOnResize.apply(this, arguments) : undefined;
+    this._vfUpdateWidgetDimensions?.();
+    return res;
+  };
+
+  nodeType.prototype.onConfigure = function () {
+    const res = origOnConfigure ? origOnConfigure.apply(this, arguments) : undefined;
+    this._vfUpdateWidgetDimensions?.();
+    return res;
+  };
 
   nodeType.prototype.onNodeCreated = function () {
     const res = origOnNodeCreated ? origOnNodeCreated.apply(this, arguments) : undefined;
@@ -44,6 +58,8 @@ export function setupFileExplorerNode(nodeType, nodeData) {
     ];
 
     setTimeout(() => {
+      ensureSpinnerStyles();
+
       const pathWidget = node.widgets?.find((w) => w.name === "file_path");
       if (pathWidget) {
         pathWidget.type = "hidden";
@@ -53,7 +69,6 @@ export function setupFileExplorerNode(nodeType, nodeData) {
       const widgetContainer = createElement("div", "vf-embedded-explorer-container");
       Object.assign(widgetContainer.style, {
         width: "100%",
-        height: "100%",
         display: "flex",
         flexDirection: "column",
         background: "#181820",
@@ -63,14 +78,57 @@ export function setupFileExplorerNode(nodeType, nodeData) {
         color: "#ddd",
         boxSizing: "border-box",
         border: "1px solid #333342",
+        minHeight: "0px",
       });
       stopCanvasEvents(widgetContainer);
 
+      const updateWidgetDimensions = () => {
+        const nodeWrapper = widgetContainer.closest?.("[data-node-id]") || widgetContainer.closest?.(".lg-node");
+        const nodeH = (nodeWrapper && nodeWrapper.clientHeight > 100)
+          ? nodeWrapper.clientHeight
+          : (Array.isArray(node.size) && node.size[1] > 0 ? node.size[1] : DEFAULT_HEIGHT);
+        const widgetH = Math.max(250, nodeH - 40);
+        widgetContainer.style.setProperty("--vf-widget-height", `${widgetH}px`);
+        widgetContainer.style.height = `${widgetH}px`;
+        widgetContainer.style.maxHeight = `${widgetH}px`;
+        widgetContainer.style.minHeight = "250px";
+      };
+      node._vfUpdateWidgetDimensions = updateWidgetDimensions;
+      updateWidgetDimensions();
+
       const explorer = new EmbeddedFileExplorer(node, pathWidget, widgetContainer);
-      node.addDOMWidget("embedded_file_explorer", "explorer", widgetContainer, {
+      const domWidget = node.addDOMWidget("embedded_file_explorer", "explorer", widgetContainer, {
         serialize: false,
         hideOnZoom: false,
+        getMinHeight: () => 250,
+        getMaxHeight: () => (Array.isArray(node.size) && node.size[1] > 0 ? Math.max(250, node.size[1] - 40) : DEFAULT_HEIGHT - 40),
+        getHeight: () => `${Array.isArray(node.size) && node.size[1] > 0 ? Math.max(250, node.size[1] - 40) : DEFAULT_HEIGHT - 40}px`,
       });
+
+      if (domWidget) {
+        domWidget.computeSize = () => {
+          const w = node.size?.[0] ? node.size[0] - 20 : DEFAULT_WIDTH;
+          const h = Array.isArray(node.size) && node.size[1] > 0 ? Math.max(250, node.size[1] - 40) : DEFAULT_HEIGHT - 40;
+          return [w, h];
+        };
+        domWidget.computeLayoutSize = () => ({
+          minHeight: 250,
+          maxHeight: Array.isArray(node.size) && node.size[1] > 0 ? Math.max(250, node.size[1] - 40) : DEFAULT_HEIGHT - 40,
+          minWidth: 225,
+        });
+      }
+
+      if (typeof ResizeObserver !== "undefined") {
+        const observer = new ResizeObserver(() => {
+          updateWidgetDimensions();
+        });
+        setTimeout(() => {
+          const nodeWrapper = widgetContainer.closest?.("[data-node-id]") || widgetContainer.closest?.(".lg-node");
+          if (nodeWrapper) {
+            observer.observe(nodeWrapper);
+          }
+        }, 100);
+      }
 
       explorer.init();
     }, 10);
@@ -577,9 +635,10 @@ class EmbeddedFileExplorer {
     this.container.appendChild(filterBar);
 
     // 3. Grid area
-    this.fileGridEl = createElement("div");
+    this.fileGridEl = createElement("div", "vf-file-grid-scroll");
     Object.assign(this.fileGridEl.style, {
-      flex: "1",
+      flex: "1 1 0px",
+      minHeight: "0px",
       overflowY: "auto",
       overflowX: "hidden",
       padding: "10px",
@@ -588,6 +647,8 @@ class EmbeddedFileExplorer {
       gap: "10px",
       background: "#14141a",
       boxSizing: "border-box",
+      scrollbarWidth: "thin",
+      scrollbarColor: "#555 #14141a",
     });
     this.container.appendChild(this.fileGridEl);
 
@@ -729,6 +790,8 @@ class EmbeddedFileExplorer {
     // 1. Both empty: center the empty state message
     if (visibleDirs.length === 0 && visibleFiles.length === 0) {
       Object.assign(this.fileGridEl.style, {
+        flex: "1 1 0px",
+        minHeight: "0px",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -739,6 +802,8 @@ class EmbeddedFileExplorer {
         gap: "0",
         gridTemplateColumns: "",
         gridAutoRows: "",
+        scrollbarWidth: "thin",
+        scrollbarColor: "#555 #14141a",
       });
       const emptyInfo = getEmptyFolderMessage(this.activeFilter, this.searchQuery, false);
       const emptyEl = createEmptyMessageEl(emptyInfo);
@@ -748,6 +813,8 @@ class EmbeddedFileExplorer {
 
     // 2. Normal scrollable container layout (vertical flow)
     Object.assign(this.fileGridEl.style, {
+      flex: "1 1 0px",
+      minHeight: "0px",
       display: "flex",
       flexDirection: "column",
       alignItems: "stretch",
@@ -758,6 +825,8 @@ class EmbeddedFileExplorer {
       padding: "10px",
       gridTemplateColumns: "",
       gridAutoRows: "",
+      scrollbarWidth: "thin",
+      scrollbarColor: "#555 #14141a",
     });
 
     let appendItem;

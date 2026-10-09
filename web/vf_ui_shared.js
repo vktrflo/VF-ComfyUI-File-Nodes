@@ -109,6 +109,23 @@ export function ensureSpinnerStyles() {
       @keyframes vf-spin {
         to { transform: rotate(360deg); }
       }
+      .vf-embedded-explorer-container {
+        box-sizing: border-box;
+      }
+      .vf-embedded-explorer-container *::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      .vf-embedded-explorer-container *::-webkit-scrollbar-track {
+        background: #14141a;
+      }
+      .vf-embedded-explorer-container *::-webkit-scrollbar-thumb {
+        background: #3e3e4e;
+        border-radius: 4px;
+      }
+      .vf-embedded-explorer-container *::-webkit-scrollbar-thumb:hover {
+        background: #55556a;
+      }
     `;
     document.head.appendChild(style);
   }
