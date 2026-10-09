@@ -83,15 +83,32 @@ export function setupFileExplorerNode(nodeType, nodeData) {
       stopCanvasEvents(widgetContainer);
 
       const updateWidgetDimensions = () => {
-        const nodeWrapper = widgetContainer.closest?.("[data-node-id]") || widgetContainer.closest?.(".lg-node");
-        const nodeH = (nodeWrapper && nodeWrapper.clientHeight > 100)
-          ? nodeWrapper.clientHeight
-          : (Array.isArray(node.size) && node.size[1] > 0 ? node.size[1] : DEFAULT_HEIGHT);
-        const widgetH = Math.max(250, nodeH - 40);
-        widgetContainer.style.setProperty("--vf-widget-height", `${widgetH}px`);
-        widgetContainer.style.height = `${widgetH}px`;
-        widgetContainer.style.maxHeight = `${widgetH}px`;
-        widgetContainer.style.minHeight = "250px";
+        const isVueNodes = Boolean(
+          window.LiteGraph?.vueNodesMode ||
+          widgetContainer.closest?.("[data-node-id]") ||
+          widgetContainer.closest?.(".lg-node")
+        );
+
+        if (!isVueNodes) {
+          // Legacy LiteGraph Canvas mode:
+          // DOM widget overlay (.dom-widget) is sized by LiteGraph to fit the node body.
+          // Container must fill the overlay with 100% height and no fixed pixel constraints.
+          widgetContainer.style.width = "100%";
+          widgetContainer.style.height = "100%";
+          widgetContainer.style.maxHeight = "none";
+          widgetContainer.style.minHeight = "0px";
+          widgetContainer.style.removeProperty("--vf-widget-height");
+        } else {
+          // Nodes 2.0 mode (Vue nodes):
+          // Node container has min-h-(--node-height). Widget must be bounded to prevent
+          // flex expansion from blowing up the node height.
+          const nodeH = Array.isArray(node.size) && node.size[1] > 0 ? node.size[1] : DEFAULT_HEIGHT;
+          const widgetH = Math.max(250, nodeH - 50);
+          widgetContainer.style.setProperty("--vf-widget-height", `${widgetH}px`);
+          widgetContainer.style.height = `calc(var(--node-height, ${nodeH}px) - 50px)`;
+          widgetContainer.style.maxHeight = `calc(var(--node-height, ${nodeH}px) - 50px)`;
+          widgetContainer.style.minHeight = "250px";
+        }
       };
       node._vfUpdateWidgetDimensions = updateWidgetDimensions;
       updateWidgetDimensions();
@@ -101,19 +118,15 @@ export function setupFileExplorerNode(nodeType, nodeData) {
         serialize: false,
         hideOnZoom: false,
         getMinHeight: () => 250,
-        getMaxHeight: () => (Array.isArray(node.size) && node.size[1] > 0 ? Math.max(250, node.size[1] - 40) : DEFAULT_HEIGHT - 40),
-        getHeight: () => `${Array.isArray(node.size) && node.size[1] > 0 ? Math.max(250, node.size[1] - 40) : DEFAULT_HEIGHT - 40}px`,
       });
 
       if (domWidget) {
-        domWidget.computeSize = () => {
-          const w = node.size?.[0] ? node.size[0] - 20 : DEFAULT_WIDTH;
-          const h = Array.isArray(node.size) && node.size[1] > 0 ? Math.max(250, node.size[1] - 40) : DEFAULT_HEIGHT - 40;
-          return [w, h];
-        };
+        // Do NOT define domWidget.computeSize!
+        // In legacy LiteGraph canvas mode, having computeSize causes LGraphNode.computeSize
+        // to continually add title/slot heights to the widget height, expanding the node indefinitely.
         domWidget.computeLayoutSize = () => ({
           minHeight: 250,
-          maxHeight: Array.isArray(node.size) && node.size[1] > 0 ? Math.max(250, node.size[1] - 40) : DEFAULT_HEIGHT - 40,
+          maxHeight: undefined,
           minWidth: 225,
         });
       }
@@ -127,6 +140,7 @@ export function setupFileExplorerNode(nodeType, nodeData) {
           if (nodeWrapper) {
             observer.observe(nodeWrapper);
           }
+          updateWidgetDimensions();
         }, 100);
       }
 

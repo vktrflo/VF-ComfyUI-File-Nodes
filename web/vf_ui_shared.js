@@ -112,6 +112,16 @@ export function ensureSpinnerStyles() {
       .vf-embedded-explorer-container {
         box-sizing: border-box;
       }
+      .lg-node .vf-embedded-explorer-container {
+        height: calc(var(--node-height, 680px) - 50px);
+        max-height: calc(var(--node-height, 680px) - 50px);
+        min-height: 250px;
+      }
+      .dom-widget > .vf-embedded-explorer-container {
+        height: 100%;
+        max-height: 100%;
+        min-height: 0px;
+      }
       .vf-embedded-explorer-container *::-webkit-scrollbar {
         width: 8px;
         height: 8px;
