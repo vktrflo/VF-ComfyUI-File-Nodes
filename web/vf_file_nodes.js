@@ -20,7 +20,7 @@ app.registerExtension({
       name: "🌀 VF File Nodes: Enable Canvas Drag & Drop Node Creation",
       type: "boolean",
       defaultValue: true,
-      tooltip: "When enabled, dragging a file from VF File Explorer onto the canvas automatically creates an image, video, or audio loader node.",
+      tooltip: "When enabled, dragging a file from VF File Explorer onto the canvas creates VF loader nodes (VFLoadImage, VFLoadVideo, VFLoadAudio). When disabled, uses ComfyUI's built-in file drop handler.",
     });
 
     setupCanvasDrop();

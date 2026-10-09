@@ -29,6 +29,179 @@ export function clearDragPayload() {
   currentDraggedFile = null;
 }
 
+function getMimeType(filename = "", mediaType = "") {
+  const ext = filename.split(".").pop()?.toLowerCase() || "";
+  const map = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    webp: "image/webp",
+    gif: "image/gif",
+    bmp: "image/bmp",
+    svg: "image/svg+xml",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    mov: "video/quicktime",
+    mkv: "video/x-matroska",
+    avi: "video/x-msvideo",
+    mp3: "audio/mpeg",
+    wav: "audio/wav",
+    flac: "audio/flac",
+    ogg: "audio/ogg",
+    m4a: "audio/mp4",
+  };
+  if (map[ext]) return map[ext];
+  if (mediaType === "image") return "image/png";
+  if (mediaType === "video") return "video/mp4";
+  if (mediaType === "audio") return "audio/mpeg";
+  return "application/octet-stream";
+}
+
+function getCanvasCoordinates(e, activeCanvas) {
+  let canvasX = 100;
+  let canvasY = 100;
+  if (!activeCanvas) return [canvasX, canvasY];
+
+  try {
+    activeCanvas.adjustMouseEvent?.(e);
+  } catch (_) {}
+
+  if (typeof e.canvasX === "number" && typeof e.canvasY === "number") {
+    canvasX = e.canvasX;
+    canvasY = e.canvasY;
+  } else if (activeCanvas.convertEventToCanvasOffset) {
+    const pos = activeCanvas.convertEventToCanvasOffset(e);
+    canvasX = pos[0];
+    canvasY = pos[1];
+  } else if (activeCanvas.graph_mouse) {
+    canvasX = activeCanvas.graph_mouse[0];
+    canvasY = activeCanvas.graph_mouse[1];
+  }
+
+  if (activeCanvas.graph_mouse) {
+    activeCanvas.graph_mouse[0] = canvasX;
+    activeCanvas.graph_mouse[1] = canvasY;
+  }
+
+  return [canvasX, canvasY];
+}
+
+function handleVfNodeCreation(e, data) {
+  let nodeType = "VFLoadImage";
+  let widgetName = "image_path";
+
+  if (data.media_type === "video") {
+    nodeType = "VFLoadVideo";
+    widgetName = "video_path";
+  } else if (data.media_type === "audio") {
+    nodeType = "VFLoadAudio";
+    widgetName = "audio_path";
+  } else if (data.media_type !== "image") {
+    return;
+  }
+
+  try {
+    const node = LiteGraph.createNode(nodeType);
+    if (!node) {
+      console.warn(`[VF File Nodes] Could not create node of type: ${nodeType}`);
+      return;
+    }
+
+    const activeCanvas = app.canvas || window.LGraphCanvas?.active_canvas;
+    const pos = getCanvasCoordinates(e, activeCanvas);
+
+    // Center node near drop point
+    node.pos = [pos[0] - 120, pos[1] - 40];
+    app.graph.add(node);
+
+    // Set the path widget immediately
+    const targetWidget = node.widgets?.find((w) => w.name === widgetName);
+    if (targetWidget) {
+      targetWidget.value = data.path;
+      targetWidget.callback?.(data.path);
+    }
+
+    // Defer slightly in case onNodeCreated has deferred widget setup
+    setTimeout(() => {
+      const w = node.widgets?.find((item) => item.name === widgetName);
+      if (w) {
+        w.value = data.path;
+        w.callback?.(data.path);
+      }
+      activeCanvas?.setDirty(true, true);
+    }, 50);
+
+    activeCanvas?.selectNode?.(node);
+    activeCanvas?.setDirty(true, true);
+  } catch (err) {
+    console.error("[VF File Nodes] Canvas drop node creation error:", err);
+  }
+}
+
+async function handleBuiltinDrop(e, data) {
+  const activeCanvas = app.canvas || window.LGraphCanvas?.active_canvas;
+  const [canvasX, canvasY] = getCanvasCoordinates(e, activeCanvas);
+
+  document.body.style.cursor = "wait";
+  try {
+    const fileUrl = `/api/vf-file-nodes/view?path=${encodeURIComponent(data.path)}`;
+    const res = await fetch(fileUrl);
+    if (!res.ok) {
+      console.error(`[VF File Nodes] Failed to fetch file for built-in drop: ${res.statusText}`);
+      return;
+    }
+    const blob = await res.blob();
+    const fileName = data.name || data.path.split(/[/\\]/).pop() || "file";
+    const mimeType = blob.type && blob.type !== "application/octet-stream"
+      ? blob.type
+      : getMimeType(fileName, data.media_type);
+    const fileObj = new File([blob], fileName, { type: mimeType });
+
+    // 1. If dropped directly onto an existing node that accepts pasted/dropped files
+    if (activeCanvas?.graph) {
+      const targetNode = activeCanvas.graph.getNodeOnPos?.(canvasX, canvasY);
+      if (targetNode) {
+        if (typeof targetNode.pasteFiles === "function") {
+          try {
+            const accepted = await targetNode.pasteFiles([fileObj]);
+            if (accepted) {
+              activeCanvas.setDirty(true, true);
+              return;
+            }
+          } catch (_) {}
+        } else if (typeof targetNode.pasteFile === "function") {
+          try {
+            const accepted = await targetNode.pasteFile(fileObj);
+            if (accepted) {
+              activeCanvas.setDirty(true, true);
+              return;
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    // 2. Delegate to ComfyUI's standard drop handler
+    if (activeCanvas?.graph_mouse) {
+      activeCanvas.graph_mouse[0] = canvasX;
+      activeCanvas.graph_mouse[1] = canvasY;
+    }
+
+    if (typeof app.handleFile === "function") {
+      await app.handleFile(fileObj, "file_drop");
+    } else if (typeof app.handleFileList === "function" && data.media_type === "image") {
+      await app.handleFileList([fileObj]);
+    } else {
+      console.warn("[VF File Nodes] No built-in ComfyUI file drop handler found on app.");
+    }
+    activeCanvas?.setDirty(true, true);
+  } catch (err) {
+    console.error("[VF File Nodes] Error handling built-in canvas drop:", err);
+  } finally {
+    document.body.style.cursor = "";
+  }
+}
+
 export function setupCanvasDrop() {
   const isVfDrag = (e) => {
     if (currentDraggedFile) return true;
@@ -40,7 +213,7 @@ export function setupCanvasDrop() {
   };
 
   const getDragData = (e) => {
-    if (currentDraggedFile?.path && currentDraggedFile?.media_type) {
+    if (currentDraggedFile?.path) {
       return currentDraggedFile;
     }
     try {
@@ -51,9 +224,6 @@ export function setupCanvasDrop() {
   };
 
   const onDragOver = (e) => {
-    const enabled = app.ui.settings.getSettingValue("VF.FileNodes.EnableCanvasDrop", true);
-    if (!enabled) return;
-
     if (isVfDrag(e)) {
       e.preventDefault();
       if (e.dataTransfer) {
@@ -62,10 +232,7 @@ export function setupCanvasDrop() {
     }
   };
 
-  const onDrop = (e) => {
-    const enabled = app.ui.settings.getSettingValue("VF.FileNodes.EnableCanvasDrop", true);
-    if (!enabled) return;
-
+  const onDrop = async (e) => {
     if (!isVfDrag(e)) return;
 
     // Ignore drops inside the embedded explorer widget itself
@@ -77,66 +244,17 @@ export function setupCanvasDrop() {
     const data = getDragData(e);
     clearDragPayload();
 
-    if (!data?.path || !data?.media_type) return;
+    if (!data?.path) return;
 
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation?.();
 
-    let nodeType = "VFLoadImage";
-    let widgetName = "image_path";
-
-    if (data.media_type === "video") {
-      nodeType = "VFLoadVideo";
-      widgetName = "video_path";
-    } else if (data.media_type === "audio") {
-      nodeType = "VFLoadAudio";
-      widgetName = "audio_path";
-    } else if (data.media_type !== "image") {
-      return;
-    }
-
-    try {
-      const node = LiteGraph.createNode(nodeType);
-      if (!node) {
-        console.warn(`[VF File Nodes] Could not create node of type: ${nodeType}`);
-        return;
-      }
-
-      // Convert event coordinates to canvas offset
-      let pos = [100, 100];
-      const activeCanvas = app.canvas || window.LGraphCanvas?.active_canvas;
-      if (activeCanvas?.convertEventToCanvasOffset) {
-        pos = activeCanvas.convertEventToCanvasOffset(e);
-      } else if (activeCanvas?.graph_mouse) {
-        pos = activeCanvas.graph_mouse;
-      }
-
-      // Center node near drop point
-      node.pos = [pos[0] - 120, pos[1] - 40];
-      app.graph.add(node);
-
-      // Set the path widget immediately
-      const targetWidget = node.widgets?.find((w) => w.name === widgetName);
-      if (targetWidget) {
-        targetWidget.value = data.path;
-        targetWidget.callback?.(data.path);
-      }
-
-      // Defer slightly in case onNodeCreated has deferred widget setup
-      setTimeout(() => {
-        const w = node.widgets?.find((item) => item.name === widgetName);
-        if (w) {
-          w.value = data.path;
-          w.callback?.(data.path);
-        }
-        activeCanvas?.setDirty(true, true);
-      }, 50);
-
-      activeCanvas?.selectNode?.(node);
-      activeCanvas?.setDirty(true, true);
-    } catch (err) {
-      console.error("[VF File Nodes] Canvas drop node creation error:", err);
+    const enabled = app.ui.settings.getSettingValue("VF.FileNodes.EnableCanvasDrop", true);
+    if (enabled) {
+      handleVfNodeCreation(e, data);
+    } else {
+      await handleBuiltinDrop(e, data);
     }
   };
 
