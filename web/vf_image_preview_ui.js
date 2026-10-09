@@ -3,16 +3,26 @@
  */
 
 import { openFileBrowserModal } from "./vf_file_browser_modal.js";
-import { createElement } from "./vf_ui_shared.js";
+import { createElement, ensureSpinnerStyles } from "./vf_ui_shared.js";
+
+const DEFAULT_WIDTH = 260;
+const DEFAULT_HEIGHT = 340;
 
 export function setupLoadImageNode(nodeType, nodeData) {
   const origOnNodeCreated = nodeType.prototype.onNodeCreated;
-
   nodeType.prototype.onNodeCreated = function () {
     const res = origOnNodeCreated ? origOnNodeCreated.apply(this, arguments) : undefined;
     const node = this;
 
+    // Set initial size
+    node.size = [
+      Math.max(node.size?.[0] || 0, DEFAULT_WIDTH),
+      Math.max(node.size?.[1] || 0, DEFAULT_HEIGHT),
+    ];
+
     setTimeout(() => {
+      ensureSpinnerStyles();
+
       const imagePathWidget = node.widgets?.find((w) => w.name === "image_path");
       const longestSizeWidget = node.widgets?.find((w) => w.name === "longest_size");
 
@@ -29,8 +39,6 @@ export function setupLoadImageNode(nodeType, nodeData) {
         const previewEl = createElement("div", "vf-image-preview-box");
         Object.assign(previewEl.style, {
           width: "100%",
-          minHeight: "140px",
-          maxHeight: "240px",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
@@ -50,6 +58,8 @@ export function setupLoadImageNode(nodeType, nodeData) {
           objectFit: "contain",
           borderRadius: "4px",
           display: "none",
+          flex: "1 1 0",
+          minHeight: "0px",
         });
 
         const badgeEl = createElement("div", "vf-dimension-badge", "");
@@ -62,10 +72,39 @@ export function setupLoadImageNode(nodeType, nodeData) {
           background: "#22222c",
           padding: "2px 8px",
           borderRadius: "4px",
+          flexShrink: "0",
         });
 
         previewEl.appendChild(imgEl);
         previewEl.appendChild(badgeEl);
+
+        const updateWidgetDimensions = () => {
+          const isVueNodes = Boolean(
+            window.LiteGraph?.vueNodesMode ||
+            previewEl.closest?.("[data-node-id]") ||
+            previewEl.closest?.(".lg-node")
+          );
+
+          if (!isVueNodes) {
+            // Legacy LiteGraph Canvas mode:
+            // DOM widget overlay (.dom-widget) is sized by LiteGraph to fit the node body.
+            // Container must fill the overlay with 100% height and no fixed pixel constraints.
+            previewEl.style.width = "100%";
+            previewEl.style.height = "100%";
+            previewEl.style.maxHeight = "none";
+            previewEl.style.minHeight = "0px";
+            imgEl.style.maxHeight = "100%";
+          } else {
+            // Nodes 2.0 mode (Vue nodes):
+            previewEl.style.width = "100%";
+            previewEl.style.height = "auto";
+            previewEl.style.maxHeight = "240px";
+            previewEl.style.minHeight = "140px";
+            imgEl.style.maxHeight = "180px";
+          }
+        };
+        node._vfUpdateImageWidgetDimensions = updateWidgetDimensions;
+        updateWidgetDimensions();
 
         const updatePreview = () => {
           const path = imagePathWidget?.value;
@@ -91,6 +130,22 @@ export function setupLoadImageNode(nodeType, nodeData) {
               badgeEl.textContent = `${origW} × ${origH}`;
             }
             badgeEl.style.display = "block";
+
+            const isVueNodes = Boolean(
+              window.LiteGraph?.vueNodesMode ||
+              previewEl.closest?.("[data-node-id]") ||
+              previewEl.closest?.(".lg-node")
+            );
+            if (!isVueNodes && Array.isArray(node.size)) {
+              if (node.size[1] < DEFAULT_HEIGHT) {
+                if (typeof node.setSize === "function") {
+                  node.setSize([Math.max(node.size[0], DEFAULT_WIDTH), DEFAULT_HEIGHT]);
+                } else {
+                  node.size = [Math.max(node.size[0], DEFAULT_WIDTH), DEFAULT_HEIGHT];
+                }
+              }
+            }
+            updateWidgetDimensions();
             node.setDirtyCanvas(true, true);
           };
           imgEl.onerror = () => {
@@ -118,8 +173,40 @@ export function setupLoadImageNode(nodeType, nodeData) {
         const domWidget = node.addDOMWidget("image_preview", "preview", previewEl, {
           serialize: false,
           hideOnZoom: false,
+          getMinHeight: () => 180,
         });
         domWidget._vfPreviewWidget = true;
+
+        if (domWidget) {
+          domWidget.computeLayoutSize = () => ({
+            minHeight: 180,
+            maxHeight: undefined,
+            minWidth: 220,
+          });
+        }
+
+        if (Array.isArray(node.size) && node.size[1] < DEFAULT_HEIGHT) {
+          if (typeof node.setSize === "function") {
+            node.setSize([Math.max(node.size[0], DEFAULT_WIDTH), DEFAULT_HEIGHT]);
+          } else {
+            node.size = [Math.max(node.size[0], DEFAULT_WIDTH), DEFAULT_HEIGHT];
+          }
+        }
+        updateWidgetDimensions();
+        node.setDirtyCanvas(true, true);
+
+        if (typeof ResizeObserver !== "undefined") {
+          setTimeout(() => {
+            const observer = new ResizeObserver(() => {
+              updateWidgetDimensions();
+            });
+            const nodeWrapper = previewEl.closest?.("[data-node-id]") || previewEl.closest?.(".lg-node");
+            if (nodeWrapper) {
+              observer.observe(nodeWrapper);
+            }
+            updateWidgetDimensions();
+          }, 100);
+        }
 
         if (imagePathWidget?.value) {
           updatePreview();
@@ -127,6 +214,24 @@ export function setupLoadImageNode(nodeType, nodeData) {
       }
     }, 10);
 
+    return res;
+  };
+
+  const origOnConfigure = nodeType.prototype.onConfigure;
+  nodeType.prototype.onConfigure = function () {
+    const res = origOnConfigure ? origOnConfigure.apply(this, arguments) : undefined;
+    if (Array.isArray(this.size)) {
+      if (this.size[0] < DEFAULT_WIDTH) this.size[0] = DEFAULT_WIDTH;
+      if (this.size[1] < DEFAULT_HEIGHT) this.size[1] = DEFAULT_HEIGHT;
+    }
+    this._vfUpdateImageWidgetDimensions?.();
+    return res;
+  };
+
+  const origOnResize = nodeType.prototype.onResize;
+  nodeType.prototype.onResize = function (size) {
+    const res = origOnResize ? origOnResize.apply(this, arguments) : undefined;
+    this._vfUpdateImageWidgetDimensions?.();
     return res;
   };
 }

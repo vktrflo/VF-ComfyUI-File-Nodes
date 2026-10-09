@@ -124,6 +124,33 @@ export function ensureSpinnerStyles() {
         max-height: 100%;
         min-height: 0px;
       }
+      .vf-image-preview-box {
+        box-sizing: border-box;
+      }
+      .lg-node .vf-image-preview-box {
+        width: 100%;
+        min-height: 140px;
+        max-height: 240px;
+      }
+      .dom-widget > .vf-image-preview-box {
+        width: 100%;
+        height: 100%;
+        min-height: 0px;
+        max-height: 100%;
+      }
+      .dom-widget > .vf-image-preview-box img {
+        max-height: 100%;
+        max-width: 100%;
+        object-fit: contain;
+      }
+      .vf-audio-preview-box {
+        box-sizing: border-box;
+      }
+      .dom-widget > .vf-audio-preview-box {
+        width: 100%;
+        height: 100%;
+        min-height: 0px;
+      }
       .vf-embedded-explorer-container *::-webkit-scrollbar {
         width: 8px;
         height: 8px;

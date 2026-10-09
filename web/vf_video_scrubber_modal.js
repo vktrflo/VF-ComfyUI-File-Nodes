@@ -6,12 +6,21 @@ import { api } from "../../scripts/api.js";
 import { openFileBrowserModal } from "./vf_file_browser_modal.js";
 import { createElement, makeModalBackdrop } from "./vf_ui_shared.js";
 
+const DEFAULT_WIDTH = 260;
+const DEFAULT_HEIGHT = 440;
+
 export function setupLoadVideoNode(nodeType, nodeData) {
   const origOnNodeCreated = nodeType.prototype.onNodeCreated;
 
   nodeType.prototype.onNodeCreated = function () {
     const res = origOnNodeCreated ? origOnNodeCreated.apply(this, arguments) : undefined;
     const node = this;
+
+    // Set initial size
+    node.size = [
+      Math.max(node.size?.[0] || 0, DEFAULT_WIDTH),
+      Math.max(node.size?.[1] || 0, DEFAULT_HEIGHT),
+    ];
 
     setTimeout(() => {
       const videoPathWidget = node.widgets?.find((w) => w.name === "video_path");
@@ -48,8 +57,27 @@ export function setupLoadVideoNode(nodeType, nodeData) {
         }, { serialize: false });
         if (scrubberBtn) scrubberBtn._vfScrubberBtn = true;
       }
+
+      if (Array.isArray(node.size) && node.size[1] < DEFAULT_HEIGHT) {
+        if (typeof node.setSize === "function") {
+          node.setSize([Math.max(node.size[0], DEFAULT_WIDTH), DEFAULT_HEIGHT]);
+        } else {
+          node.size = [Math.max(node.size[0], DEFAULT_WIDTH), DEFAULT_HEIGHT];
+        }
+      }
+      node.setDirtyCanvas(true, true);
     }, 10);
 
+    return res;
+  };
+
+  const origOnConfigure = nodeType.prototype.onConfigure;
+  nodeType.prototype.onConfigure = function () {
+    const res = origOnConfigure ? origOnConfigure.apply(this, arguments) : undefined;
+    if (Array.isArray(this.size)) {
+      if (this.size[0] < DEFAULT_WIDTH) this.size[0] = DEFAULT_WIDTH;
+      if (this.size[1] < DEFAULT_HEIGHT) this.size[1] = DEFAULT_HEIGHT;
+    }
     return res;
   };
 }

@@ -4,6 +4,7 @@
 
 import { app } from "../../scripts/app.js";
 import { setupCanvasDrop } from "./vf_canvas_drop.js";
+import { ensureSpinnerStyles } from "./vf_ui_shared.js";
 import { setupFileExplorerNode } from "./vf_file_explorer_ui.js";
 import { setupLoadImageNode } from "./vf_image_preview_ui.js";
 import { setupLoadVideoNode } from "./vf_video_scrubber_modal.js";
@@ -14,6 +15,7 @@ const EXTENSION_NAME = "VF.FileNodes";
 app.registerExtension({
   name: EXTENSION_NAME,
   async setup() {
+    ensureSpinnerStyles();
     // Register ComfyUI Settings
     app.ui.settings.addSetting({
       id: "VF.FileNodes.EnableCanvasDrop",
