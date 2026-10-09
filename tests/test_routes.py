@@ -109,3 +109,156 @@ class TestFileNodesRoutes(AioHTTPTestCase):
             # 3. Deleting non-existent file
             resp_none = await self.client.post("/api/vf-file-nodes/delete", json={"path": str(sup_file)})
             assert resp_none.status == 404
+
+    @unittest_run_loop
+    async def test_thumbnail_and_metadata(self):
+        import tempfile
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_img = Path(tmpdir) / "test_thumb.jpg"
+            im = Image.new("RGB", (640, 480), color="blue")
+            im.save(test_img, "JPEG")
+
+            # 1. Test handle_list returns ctime and dimensions
+            list_resp = await self.client.get(f"/api/vf-file-nodes/list?path={tmpdir}&filter=image")
+            assert list_resp.status == 200
+            list_data = await list_resp.json()
+            assert len(list_data["files"]) == 1
+            f = list_data["files"][0]
+            assert f["name"] == "test_thumb.jpg"
+            assert "ctime" in f and f["ctime"] > 0
+            assert f["dimensions"] == [640, 480]
+
+            # 2. Test handle_thumbnail generates JPEG stream
+            thumb_resp = await self.client.get(f"/api/vf-file-nodes/thumbnail?path={test_img}")
+            assert thumb_resp.status == 200
+            assert thumb_resp.headers["Content-Type"] == "image/jpeg"
+            thumb_bytes = await thumb_resp.read()
+            assert len(thumb_bytes) > 0
+            # Test it is a valid JPEG image
+            with Image.open(Path(tmpdir) / "test_thumb.jpg") as read_im:
+                assert read_im.size == (640, 480)
+
+    @unittest_run_loop
+    async def test_comfy_parameters(self):
+        import json
+        import tempfile
+        from PIL import Image
+        from PIL.PngImagePlugin import PngInfo
+
+        # 1. Missing path
+        resp = await self.client.get("/api/vf-file-nodes/comfy-parameters")
+        assert resp.status == 400
+        data = await resp.json()
+        assert data["has_parameters"] is False
+
+        # 2. Non-existent file
+        resp_nf = await self.client.get("/api/vf-file-nodes/comfy-parameters?path=nonexistent.png")
+        assert resp_nf.status == 200
+        data_nf = await resp_nf.json()
+        assert data_nf["has_parameters"] is False
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 3. File without parameters
+            plain_img = Path(tmpdir) / "plain.jpg"
+            Image.new("RGB", (32, 32), color="red").save(plain_img, "JPEG")
+            resp_plain = await self.client.get(f"/api/vf-file-nodes/comfy-parameters?path={plain_img}")
+            assert resp_plain.status == 200
+            data_plain = await resp_plain.json()
+            assert data_plain["has_parameters"] is False
+
+            # 4. File with embedded ComfyUI prompt & workflow
+            prompt_graph = {
+                "3": {
+                    "class_type": "KSampler",
+                    "inputs": {
+                        "seed": 123456789,
+                        "steps": 25,
+                        "cfg": 7.5,
+                        "sampler_name": "euler_ancestral",
+                        "scheduler": "karras",
+                        "denoise": 1.0,
+                        "model": ["4", 0],
+                        "positive": ["6", 0],
+                        "negative": ["7", 0],
+                    },
+                },
+                "4": {
+                    "class_type": "CheckpointLoaderSimple",
+                    "inputs": {
+                        "ckpt_name": "sd_xl_base_1.0.safetensors",
+                    },
+                },
+                "6": {
+                    "class_type": "CLIPTextEncode",
+                    "inputs": {
+                        "text": "a majestic lion in golden sunset",
+                    },
+                },
+                "7": {
+                    "class_type": "CLIPTextEncode",
+                    "inputs": {
+                        "text": "blurry, low quality",
+                    },
+                },
+            }
+            workflow_graph = {
+                "nodes": [{"id": 3, "type": "KSampler"}],
+                "extra": {},
+            }
+
+            info = PngInfo()
+            info.add_text("prompt", json.dumps(prompt_graph))
+            info.add_text("workflow", json.dumps(workflow_graph))
+
+            comfy_img = Path(tmpdir) / "comfy_gen.png"
+            Image.new("RGB", (64, 64), color="green").save(comfy_img, "PNG", pnginfo=info)
+
+            resp_comfy = await self.client.get(f"/api/vf-file-nodes/comfy-parameters?path={comfy_img}")
+            assert resp_comfy.status == 200
+            data_comfy = await resp_comfy.json()
+            assert data_comfy["has_parameters"] is True
+            assert data_comfy["seed"] == 123456789
+            assert data_comfy["steps"] == 25
+            assert data_comfy["cfg"] == 7.5
+            assert data_comfy["sampler"] == "euler_ancestral"
+            assert data_comfy["scheduler"] == "karras"
+            assert data_comfy["positive_prompt"] == "a majestic lion in golden sunset"
+            assert data_comfy["negative_prompt"] == "blurry, low quality"
+            assert data_comfy["models"] == ["sd_xl_base_1.0.safetensors"]
+            assert data_comfy["has_workflow"] is True
+            assert isinstance(data_comfy["workflow"], dict)
+            assert isinstance(data_comfy["prompt"], dict)
+
+    @unittest_run_loop
+    async def test_is_local_endpoint(self):
+        # Default loopback test client should be recognized as local
+        resp = await self.client.get("/api/vf-file-nodes/is-local")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["is_local"] is True
+
+        # Remote IP forwarded header should be recognized as not local
+        resp_remote = await self.client.get(
+            "/api/vf-file-nodes/is-local",
+            headers={"x-forwarded-for": "198.51.100.5"},
+        )
+        assert resp_remote.status == 200
+        data_remote = await resp_remote.json()
+        assert data_remote["is_local"] is False
+
+    @unittest_run_loop
+    async def test_open_in_explorer_remote_forbidden(self):
+        resp = await self.client.post(
+            "/api/vf-file-nodes/open-in-explorer",
+            json={"path": str(Path(__file__).resolve())},
+            headers={"x-forwarded-for": "198.51.100.5"},
+        )
+        assert resp.status == 403
+        data = await resp.json()
+        assert data["success"] is False
+        assert "only supported from the local machine" in data["error"]
+
+
+

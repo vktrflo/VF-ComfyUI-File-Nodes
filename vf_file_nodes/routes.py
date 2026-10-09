@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import io
+import ipaddress
 import os
+import socket
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +25,7 @@ from .media_utils import (
     TEXT_EXTENSIONS,
     VIDEO_EXTENSIONS,
     classify_media_type,
+    extract_comfy_parameters,
 )
 
 try:
@@ -36,6 +43,184 @@ except ImportError:
 _THUMBNAIL_CACHE: dict[str, tuple[float, bytes]] = {}
 MAX_THUMB_CACHE_SIZE = 1000
 
+# Metadata cache: path -> (mtime, size, meta_dict)
+_METADATA_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
+MAX_META_CACHE_SIZE = 10000
+
+# ComfyUI parameters cache: path -> (mtime, size, params_dict)
+_COMFY_PARAMS_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
+MAX_PARAMS_CACHE_SIZE = 1000
+
+_DISK_CACHE_DIR: Path | None = None
+_LOCAL_IPS_CACHE: set[str] = set()
+_LOCAL_IPS_CACHE_TIME: float = 0.0
+
+
+def get_local_ip_set() -> set[str]:
+    """Return all IP addresses corresponding to local network interfaces on this machine."""
+    global _LOCAL_IPS_CACHE, _LOCAL_IPS_CACHE_TIME
+    now = time.time()
+    if _LOCAL_IPS_CACHE and (now - _LOCAL_IPS_CACHE_TIME) < 60.0:
+        return _LOCAL_IPS_CACHE
+
+    local_ips = {"127.0.0.1", "::1", "localhost"}
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            local_ips.add(ip)
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            local_ips.add(info[4][0])
+    except Exception:
+        pass
+
+    _LOCAL_IPS_CACHE = local_ips
+    _LOCAL_IPS_CACHE_TIME = now
+    return local_ips
+
+
+def is_local_request(request: web.Request) -> bool:
+    """Determine if an incoming HTTP request originated from the same machine."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.headers.get("x-real-ip") or request.remote or ""
+
+    if not client_ip:
+        return False
+
+    local_ips = get_local_ip_set()
+    if client_ip in local_ips:
+        return True
+
+    try:
+        ip = ipaddress.ip_address(client_ip)
+        if ip.is_loopback or (getattr(ip, "ipv4_mapped", None) and ip.ipv4_mapped.is_loopback):
+            return True
+    except ValueError:
+        pass
+
+    return False
+
+
+def _get_disk_cache_dir() -> Path:
+    global _DISK_CACHE_DIR
+    if _DISK_CACHE_DIR is None:
+        base = None
+        if folder_paths is not None:
+            try:
+                user_dir = folder_paths.get_user_directory()
+                if user_dir and os.path.exists(user_dir):
+                    base = os.path.join(user_dir, ".cache", "vf_thumbnails")
+            except Exception:
+                base = None
+        if not base:
+            base = os.path.join(tempfile.gettempdir(), "comfyui_vf_thumbnails")
+        os.makedirs(base, exist_ok=True)
+        _DISK_CACHE_DIR = Path(base)
+    return _DISK_CACHE_DIR
+
+
+def _get_cache_key(file_path: str, mtime: float, size: int) -> str:
+    h = hashlib.sha256(f"{file_path}:{mtime}:{size}".encode("utf-8")).hexdigest()
+    return h[:32]
+
+
+def get_media_metadata(file_path: str, media_type: str, st: os.stat_result) -> dict[str, Any]:
+    """Extract creation time, dimensions, and duration for supported media types."""
+    cached = _METADATA_CACHE.get(file_path)
+    if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+        return cached[2]
+
+    meta: dict[str, Any] = {
+        "dimensions": None,
+        "duration": None,
+        "ctime": getattr(st, "st_ctime", st.st_mtime),
+    }
+
+    try:
+        if media_type == "image":
+            with Image.open(file_path) as im:
+                meta["dimensions"] = [im.width, im.height]
+        elif media_type == "video":
+            import av
+
+            with av.open(file_path) as container:
+                stream = next((s for s in container.streams if s.type == "video"), None)
+                if stream:
+                    meta["dimensions"] = [stream.width, stream.height]
+                if container.duration is not None and av.time_base:
+                    meta["duration"] = round(float(container.duration) / av.time_base, 2)
+                elif stream and stream.duration is not None and stream.time_base:
+                    meta["duration"] = round(float(stream.duration * stream.time_base), 2)
+        elif media_type == "audio":
+            import av
+
+            with av.open(file_path) as container:
+                if container.duration is not None and av.time_base:
+                    meta["duration"] = round(float(container.duration) / av.time_base, 2)
+                else:
+                    stream = next((s for s in container.streams if s.type == "audio"), None)
+                    if stream and stream.duration is not None and stream.time_base:
+                        meta["duration"] = round(float(stream.duration * stream.time_base), 2)
+    except Exception:
+        pass
+
+    if len(_METADATA_CACHE) > MAX_META_CACHE_SIZE:
+        _METADATA_CACHE.clear()
+    _METADATA_CACHE[file_path] = (st.st_mtime, st.st_size, meta)
+    return meta
+
+
+def _generate_thumbnail_worker(file_path: str, media_type: str, cache_file: Path) -> bytes | None:
+    """Generate thumbnail image in background worker thread."""
+    thumb_img: Image.Image | None = None
+
+    try:
+        if media_type == "image":
+            with Image.open(file_path) as im:
+                if hasattr(im, "draft") and file_path.lower().endswith((".jpg", ".jpeg")):
+                    try:
+                        im.draft("RGB", (256, 256))
+                    except Exception:
+                        pass
+                im = im.convert("RGB")
+                im.thumbnail((256, 256), Image.Resampling.BILINEAR)
+                thumb_img = im
+        elif media_type == "video":
+            import av
+
+            with av.open(file_path) as container:
+                stream = next((s for s in container.streams if s.type == "video"), None)
+                if stream:
+                    stream.thread_type = "AUTO"
+                    for frame in container.decode(stream):
+                        im = frame.to_image().convert("RGB")
+                        im.thumbnail((256, 256), Image.Resampling.BILINEAR)
+                        thumb_img = im
+                        break
+
+        if thumb_img is None:
+            return None
+
+        buf = io.BytesIO()
+        thumb_img.save(buf, format="JPEG", quality=80)
+        jpeg_bytes = buf.getvalue()
+
+        try:
+            tmp_cache = cache_file.with_suffix(".tmp")
+            tmp_cache.write_bytes(jpeg_bytes)
+            tmp_cache.replace(cache_file)
+        except Exception:
+            pass
+
+        return jpeg_bytes
+    except Exception:
+        return None
+
 
 async def handle_drives(request: web.Request) -> web.Response:
     """Return available drive roots and mapped network shares."""
@@ -43,8 +228,13 @@ async def handle_drives(request: web.Request) -> web.Response:
     return web.json_response({"drives": drives})
 
 
+async def handle_is_local(request: web.Request) -> web.Response:
+    """Return whether the current client is accessing from the same machine."""
+    return web.json_response({"is_local": is_local_request(request)})
+
+
 async def handle_start(request: web.Request) -> web.Response:
-    """Return default start directory."""
+    """Return default start directory and local client status."""
     start_path = ""
     if folder_paths is not None:
         try:
@@ -54,7 +244,10 @@ async def handle_start(request: web.Request) -> web.Response:
     if not start_path or not os.path.exists(start_path):
         drives = get_available_drives()
         start_path = drives[0]["path"] if drives else os.path.expanduser("~")
-    return web.json_response({"path": start_path})
+    return web.json_response({
+        "path": start_path,
+        "is_local": is_local_request(request),
+    })
 
 
 async def handle_resolve(request: web.Request) -> web.Response:
@@ -148,13 +341,17 @@ async def handle_list(request: web.Request) -> web.Response:
 
                         if include:
                             st = entry.stat()
+                            meta = get_media_metadata(entry.path, media_type, st)
                             files.append({
                                 "name": entry.name,
                                 "path": entry.path,
                                 "size": st.st_size,
                                 "mtime": st.st_mtime,
+                                "ctime": meta.get("ctime", getattr(st, "st_ctime", st.st_mtime)),
                                 "extension": ext,
                                 "media_type": media_type,
+                                "dimensions": meta.get("dimensions"),
+                                "duration": meta.get("duration"),
                             })
                 except (PermissionError, OSError):
                     continue
@@ -193,7 +390,7 @@ async def handle_list(request: web.Request) -> web.Response:
 
 
 async def handle_thumbnail(request: web.Request) -> web.StreamResponse:
-    """Generate or retrieve cached thumbnail image."""
+    """Generate or retrieve cached thumbnail image with offloaded worker threads."""
     file_path = request.query.get("path", "")
     if not file_path or not os.path.isfile(file_path):
         return web.Response(status=404, text="File not found")
@@ -204,43 +401,38 @@ async def handle_thumbnail(request: web.Request) -> web.StreamResponse:
     except OSError:
         return web.Response(status=404, text="Cannot stat file")
 
+    # 1. Check in-memory cache
     cached = _THUMBNAIL_CACHE.get(file_path)
     if cached and cached[0] == mtime:
         return web.Response(body=cached[1], content_type="image/jpeg")
 
     media_type = classify_media_type(file_path)
-    thumb_img: Image.Image | None = None
+    if media_type not in ("image", "video"):
+        return web.Response(status=415, text="Thumbnail not supported")
 
+    # 2. Check disk cache
+    cache_key = _get_cache_key(file_path, mtime, st.st_size)
+    cache_file = _get_disk_cache_dir() / f"{cache_key}.jpg"
+
+    if cache_file.exists():
+        try:
+            jpeg_bytes = await asyncio.to_thread(cache_file.read_bytes)
+            if len(_THUMBNAIL_CACHE) > MAX_THUMB_CACHE_SIZE:
+                _THUMBNAIL_CACHE.clear()
+            _THUMBNAIL_CACHE[file_path] = (mtime, jpeg_bytes)
+            return web.Response(body=jpeg_bytes, content_type="image/jpeg")
+        except OSError:
+            pass
+
+    # 3. Offload generation to background worker thread so the event loop stays responsive
     try:
-        if media_type == "image":
-            with Image.open(file_path) as im:
-                im = im.convert("RGB")
-                im.thumbnail((256, 256), Image.Resampling.LANCZOS)
-                thumb_img = im
-        elif media_type == "video":
-            import av
-
-            container = av.open(file_path)
-            stream = next((s for s in container.streams if s.type == "video"), None)
-            if stream:
-                for frame in container.decode(stream):
-                    im = frame.to_image().convert("RGB")
-                    im.thumbnail((256, 256), Image.Resampling.LANCZOS)
-                    thumb_img = im
-                    break
-            container.close()
-
-        if thumb_img is None:
-            return web.Response(status=415, text="Thumbnail not supported")
-
-        buf = io.BytesIO()
-        thumb_img.save(buf, format="JPEG", quality=80)
-        jpeg_bytes = buf.getvalue()
+        jpeg_bytes = await asyncio.to_thread(_generate_thumbnail_worker, file_path, media_type, cache_file)
+        if jpeg_bytes is None:
+            return web.Response(status=415, text="Thumbnail generation failed")
 
         if len(_THUMBNAIL_CACHE) > MAX_THUMB_CACHE_SIZE:
             _THUMBNAIL_CACHE.clear()
         _THUMBNAIL_CACHE[file_path] = (mtime, jpeg_bytes)
-
         return web.Response(body=jpeg_bytes, content_type="image/jpeg")
     except Exception as exc:
         return web.Response(status=500, text=f"Thumbnail error: {exc}")
@@ -290,6 +482,12 @@ async def handle_delete(request: web.Request) -> web.Response:
 
 async def handle_open_in_explorer(request: web.Request) -> web.Response:
     """Reveal a file or folder in the system file manager."""
+    if not is_local_request(request):
+        return web.json_response(
+            {"success": False, "error": "Opening file explorer is only supported from the local machine"},
+            status=403,
+        )
+
     data = {}
     if request.can_read_body:
         try:
@@ -407,14 +605,44 @@ async def handle_remove_favorite(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "favorites": favs})
 
 
+async def handle_comfy_parameters(request: web.Request) -> web.Response:
+    """Return embedded ComfyUI parameters (prompt, negative, sampler settings, workflow)."""
+    file_path = str(request.query.get("path", "")).strip()
+    if not file_path:
+        return web.json_response({"has_parameters": False, "error": "Path required"}, status=400)
+
+    p = Path(file_path)
+    if not p.is_file():
+        return web.json_response({"has_parameters": False, "error": "File not found"}, status=200)
+
+    try:
+        st = p.stat()
+        cached = _COMFY_PARAMS_CACHE.get(str(p))
+        if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+            return web.json_response(cached[2])
+    except Exception:
+        return web.json_response({"has_parameters": False, "error": "Cannot read file"}, status=200)
+
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, extract_comfy_parameters, str(p))
+
+    if len(_COMFY_PARAMS_CACHE) > MAX_PARAMS_CACHE_SIZE:
+        _COMFY_PARAMS_CACHE.clear()
+    _COMFY_PARAMS_CACHE[str(p)] = (st.st_mtime, st.st_size, res)
+
+    return web.json_response(res)
+
+
 def setup_routes(app: web.Application) -> None:
     """Register all routes on an aiohttp application."""
+    app.router.add_get("/api/vf-file-nodes/is-local", handle_is_local)
     app.router.add_get("/api/vf-file-nodes/drives", handle_drives)
     app.router.add_get("/api/vf-file-nodes/start", handle_start)
     app.router.add_get("/api/vf-file-nodes/resolve", handle_resolve)
     app.router.add_get("/api/vf-file-nodes/list", handle_list)
     app.router.add_get("/api/vf-file-nodes/thumbnail", handle_thumbnail)
     app.router.add_get("/api/vf-file-nodes/view", handle_view)
+    app.router.add_get("/api/vf-file-nodes/comfy-parameters", handle_comfy_parameters)
     app.router.add_post("/api/vf-file-nodes/delete", handle_delete)
     app.router.add_post("/api/vf-file-nodes/open-in-explorer", handle_open_in_explorer)
     app.router.add_get("/api/vf-file-nodes/favorites", handle_get_favorites)

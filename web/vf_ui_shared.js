@@ -2,6 +2,8 @@
  * Shared UI primitives and SVG icons for VF ComfyUI File Nodes.
  */
 
+import { api } from "../../scripts/api.js";
+
 export function createElement(tag, className = "", text = "") {
   const el = document.createElement(tag);
   if (className) el.className = className;
@@ -99,3 +101,162 @@ export function isSupportedMediaFile(file) {
   const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
   return SUPPORTED_EXTENSIONS.has(ext);
 }
+
+export function ensureSpinnerStyles() {
+  if (typeof document === "undefined") return;
+  if (!document.getElementById("vf-ui-shared-styles")) {
+    const style = document.createElement("style");
+    style.id = "vf-ui-shared-styles";
+    style.textContent = `
+      @keyframes vf-spin {
+        to { transform: rotate(360deg); }
+      }
+      .vf-embedded-explorer-container {
+        box-sizing: border-box;
+      }
+      .lg-node .vf-embedded-explorer-container {
+        height: calc(var(--node-height, 680px) - 50px);
+        max-height: calc(var(--node-height, 680px) - 50px);
+        min-height: 250px;
+      }
+      .dom-widget > .vf-embedded-explorer-container {
+        height: 100%;
+        max-height: 100%;
+        min-height: 0px;
+      }
+      .vf-embedded-explorer-container *::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      .vf-embedded-explorer-container *::-webkit-scrollbar-track {
+        background: #14141a;
+      }
+      .vf-embedded-explorer-container *::-webkit-scrollbar-thumb {
+        background: #3e3e4e;
+        border-radius: 4px;
+      }
+      .vf-embedded-explorer-container *::-webkit-scrollbar-thumb:hover {
+        background: #55556a;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
+
+export function formatDateTime(sec) {
+  if (!sec || isNaN(sec)) return "";
+  const d = new Date(sec * 1000);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const dateStr = d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+  const timeStr = d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${dateStr}, ${timeStr}`;
+}
+
+export function formatDuration(sec) {
+  if (sec == null || isNaN(sec) || sec <= 0) return "";
+  const total = Math.floor(sec);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const sPad = s < 10 ? `0${s}` : `${s}`;
+  if (h > 0) {
+    const mPad = m < 10 ? `0${m}` : `${m}`;
+    return `${h}:${mPad}:${sPad}`;
+  }
+  return `${m}:${sPad}`;
+}
+
+export function getEmptyFolderMessage(filter = "all", searchQuery = "", hasDirs = false) {
+  if (searchQuery) {
+    return {
+      title: "No matching files",
+      subtitle: `No files found matching "${searchQuery}"`,
+      icon: "🔍",
+    };
+  }
+  const typeLabels = {
+    all: "files",
+    image: "image files",
+    video: "video files",
+    audio: "audio files",
+    text: "text files",
+  };
+  const label = typeLabels[filter] || "files";
+  if (!hasDirs) {
+    if (filter === "all") {
+      return {
+        title: "This folder is empty",
+        subtitle: "No files or subfolders found here",
+        icon: "📂",
+      };
+    }
+    return {
+      title: `No ${label} found`,
+      subtitle: `There are no ${label} in this folder`,
+      icon: "📂",
+    };
+  }
+  return {
+    title: `No ${label} to view`,
+    subtitle: `This folder has subfolders, but no ${label}`,
+    icon: "📁",
+  };
+}
+
+export function createEmptyMessageEl(emptyInfo) {
+  const emptyEl = createElement("div", "vf-empty-folder-message");
+  Object.assign(emptyEl.style, {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "32px 16px",
+    color: "#888",
+    textAlign: "center",
+    width: "100%",
+    boxSizing: "border-box",
+    userSelect: "none",
+  });
+  emptyEl.innerHTML = `
+    <div style="font-size: 32px; margin-bottom: 8px; opacity: 0.5;">${emptyInfo.icon}</div>
+    <div style="font-size: 13px; font-weight: 500; color: #bbb;">${emptyInfo.title}</div>
+    <div style="font-size: 11px; margin-top: 4px; color: #777;">${emptyInfo.subtitle}</div>
+  `;
+  return emptyEl;
+}
+
+export function isLikelyLocalHost() {
+  const host = (typeof window !== "undefined" && window.location?.hostname) || "";
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+}
+
+let _isLocalPromise = null;
+
+export function checkIsLocalClient() {
+  if (!_isLocalPromise) {
+    _isLocalPromise = (async () => {
+      try {
+        if (api && typeof api.fetchApi === "function") {
+          const resp = await api.fetchApi("/api/vf-file-nodes/is-local");
+          if (resp.ok) {
+            const data = await resp.json();
+            return Boolean(data.is_local);
+          }
+        }
+      } catch (e) {}
+
+      return isLikelyLocalHost();
+    })();
+  }
+  return _isLocalPromise;
+}
+

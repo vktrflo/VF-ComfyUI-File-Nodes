@@ -4,8 +4,20 @@
 
 import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
-import { setupDragPayload } from "./vf_canvas_drop.js";
-import { createElement, icon, isSupportedMediaFile, makeModalBackdrop } from "./vf_ui_shared.js";
+import { clearDragPayload, setupDragPayload } from "./vf_canvas_drop.js";
+import {
+  checkIsLocalClient,
+  createElement,
+  createEmptyMessageEl,
+  ensureSpinnerStyles,
+  formatDateTime,
+  formatDuration,
+  getEmptyFolderMessage,
+  icon,
+  isLikelyLocalHost,
+  isSupportedMediaFile,
+  makeModalBackdrop,
+} from "./vf_ui_shared.js";
 
 const DEFAULT_WIDTH = 640;
 const DEFAULT_HEIGHT = 680;
@@ -22,6 +34,20 @@ function stopCanvasEvents(el) {
 
 export function setupFileExplorerNode(nodeType, nodeData) {
   const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+  const origOnResize = nodeType.prototype.onResize;
+  const origOnConfigure = nodeType.prototype.onConfigure;
+
+  nodeType.prototype.onResize = function (size) {
+    const res = origOnResize ? origOnResize.apply(this, arguments) : undefined;
+    this._vfUpdateWidgetDimensions?.();
+    return res;
+  };
+
+  nodeType.prototype.onConfigure = function () {
+    const res = origOnConfigure ? origOnConfigure.apply(this, arguments) : undefined;
+    this._vfUpdateWidgetDimensions?.();
+    return res;
+  };
 
   nodeType.prototype.onNodeCreated = function () {
     const res = origOnNodeCreated ? origOnNodeCreated.apply(this, arguments) : undefined;
@@ -34,6 +60,8 @@ export function setupFileExplorerNode(nodeType, nodeData) {
     ];
 
     setTimeout(() => {
+      ensureSpinnerStyles();
+
       const pathWidget = node.widgets?.find((w) => w.name === "file_path");
       if (pathWidget) {
         pathWidget.type = "hidden";
@@ -43,7 +71,6 @@ export function setupFileExplorerNode(nodeType, nodeData) {
       const widgetContainer = createElement("div", "vf-embedded-explorer-container");
       Object.assign(widgetContainer.style, {
         width: "100%",
-        height: "100%",
         display: "flex",
         flexDirection: "column",
         background: "#181820",
@@ -53,14 +80,71 @@ export function setupFileExplorerNode(nodeType, nodeData) {
         color: "#ddd",
         boxSizing: "border-box",
         border: "1px solid #333342",
+        minHeight: "0px",
       });
       stopCanvasEvents(widgetContainer);
 
+      const updateWidgetDimensions = () => {
+        const isVueNodes = Boolean(
+          window.LiteGraph?.vueNodesMode ||
+          widgetContainer.closest?.("[data-node-id]") ||
+          widgetContainer.closest?.(".lg-node")
+        );
+
+        if (!isVueNodes) {
+          // Legacy LiteGraph Canvas mode:
+          // DOM widget overlay (.dom-widget) is sized by LiteGraph to fit the node body.
+          // Container must fill the overlay with 100% height and no fixed pixel constraints.
+          widgetContainer.style.width = "100%";
+          widgetContainer.style.height = "100%";
+          widgetContainer.style.maxHeight = "none";
+          widgetContainer.style.minHeight = "0px";
+          widgetContainer.style.removeProperty("--vf-widget-height");
+        } else {
+          // Nodes 2.0 mode (Vue nodes):
+          // Node container has min-h-(--node-height). Widget must be bounded to prevent
+          // flex expansion from blowing up the node height.
+          const nodeH = Array.isArray(node.size) && node.size[1] > 0 ? node.size[1] : DEFAULT_HEIGHT;
+          const widgetH = Math.max(250, nodeH - 50);
+          widgetContainer.style.setProperty("--vf-widget-height", `${widgetH}px`);
+          widgetContainer.style.height = `calc(var(--node-height, ${nodeH}px) - 50px)`;
+          widgetContainer.style.maxHeight = `calc(var(--node-height, ${nodeH}px) - 50px)`;
+          widgetContainer.style.minHeight = "250px";
+        }
+      };
+      node._vfUpdateWidgetDimensions = updateWidgetDimensions;
+      updateWidgetDimensions();
+
       const explorer = new EmbeddedFileExplorer(node, pathWidget, widgetContainer);
-      node.addDOMWidget("embedded_file_explorer", "explorer", widgetContainer, {
+      const domWidget = node.addDOMWidget("embedded_file_explorer", "explorer", widgetContainer, {
         serialize: false,
         hideOnZoom: false,
+        getMinHeight: () => 250,
       });
+
+      if (domWidget) {
+        // Do NOT define domWidget.computeSize!
+        // In legacy LiteGraph canvas mode, having computeSize causes LGraphNode.computeSize
+        // to continually add title/slot heights to the widget height, expanding the node indefinitely.
+        domWidget.computeLayoutSize = () => ({
+          minHeight: 250,
+          maxHeight: undefined,
+          minWidth: 225,
+        });
+      }
+
+      if (typeof ResizeObserver !== "undefined") {
+        const observer = new ResizeObserver(() => {
+          updateWidgetDimensions();
+        });
+        setTimeout(() => {
+          const nodeWrapper = widgetContainer.closest?.("[data-node-id]") || widgetContainer.closest?.(".lg-node");
+          if (nodeWrapper) {
+            observer.observe(nodeWrapper);
+          }
+          updateWidgetDimensions();
+        }, 100);
+      }
 
       explorer.init();
     }, 10);
@@ -567,18 +651,20 @@ class EmbeddedFileExplorer {
     this.container.appendChild(filterBar);
 
     // 3. Grid area
-    this.fileGridEl = createElement("div");
+    this.fileGridEl = createElement("div", "vf-file-grid-scroll");
     Object.assign(this.fileGridEl.style, {
-      flex: "1",
+      flex: "1 1 0px",
+      minHeight: "0px",
       overflowY: "auto",
       overflowX: "hidden",
       padding: "10px",
-      display: "grid",
-      gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-      gridAutoRows: "120px",
-      gap: "8px",
+      display: "flex",
+      flexDirection: "column",
+      gap: "10px",
       background: "#14141a",
       boxSizing: "border-box",
+      scrollbarWidth: "thin",
+      scrollbarColor: "#555 #14141a",
     });
     this.container.appendChild(this.fileGridEl);
 
@@ -633,6 +719,12 @@ class EmbeddedFileExplorer {
       padding: "4px 8px",
       fontSize: "11px",
       cursor: "pointer",
+    });
+    if (!isLikelyLocalHost()) {
+      revealBtn.style.display = "none";
+    }
+    checkIsLocalClient().then((isLocal) => {
+      revealBtn.style.display = isLocal ? "" : "none";
     });
     revealBtn.onclick = () => {
       api.fetchApi("/api/vf-file-nodes/open-in-explorer", {
@@ -706,27 +798,78 @@ class EmbeddedFileExplorer {
     this.fileGridEl.innerHTML = "";
     const isMosaic = this.layoutMode === "mosaic";
 
-    let cols = null;
-    let numCols = 1;
-    let itemIdx = 0;
+    // Filter visible items
+    const visibleDirs = this.dirs.filter((dirName) => {
+      if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return false;
+      return true;
+    });
 
+    const visibleFiles = this.files.filter((file) => {
+      if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return false;
+      return true;
+    });
+
+    // 1. Both empty: center the empty state message
+    if (visibleDirs.length === 0 && visibleFiles.length === 0) {
+      Object.assign(this.fileGridEl.style, {
+        flex: "1 1 0px",
+        minHeight: "0px",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        overflowY: "auto",
+        overflowX: "hidden",
+        padding: "10px",
+        gap: "0",
+        gridTemplateColumns: "",
+        gridAutoRows: "",
+        scrollbarWidth: "thin",
+        scrollbarColor: "#555 #14141a",
+      });
+      const emptyInfo = getEmptyFolderMessage(this.activeFilter, this.searchQuery, false);
+      const emptyEl = createEmptyMessageEl(emptyInfo);
+      this.fileGridEl.appendChild(emptyEl);
+      return;
+    }
+
+    // 2. Normal scrollable container layout (vertical flow)
+    Object.assign(this.fileGridEl.style, {
+      flex: "1 1 0px",
+      minHeight: "0px",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "stretch",
+      justifyContent: "flex-start",
+      gap: "10px",
+      overflowY: "auto",
+      overflowX: "hidden",
+      padding: "10px",
+      gridTemplateColumns: "",
+      gridAutoRows: "",
+      scrollbarWidth: "thin",
+      scrollbarColor: "#555 #14141a",
+    });
+
+    let appendItem;
     if (isMosaic) {
       const minColWidth = 120;
       const gap = 8;
       const availableWidth = this.fileGridEl.clientWidth || (this.container.clientWidth ? this.container.clientWidth - 20 : DEFAULT_WIDTH);
-      numCols = Math.max(1, Math.floor((availableWidth + gap) / (minColWidth + gap)));
+      const numCols = Math.max(1, Math.floor((availableWidth + gap) / (minColWidth + gap)));
       this._currentCols = numCols;
 
-      this.fileGridEl.style.display = "flex";
-      this.fileGridEl.style.flexDirection = "row";
-      this.fileGridEl.style.alignItems = "flex-start";
-      this.fileGridEl.style.gap = `${gap}px`;
-      this.fileGridEl.style.overflowY = "auto";
-      this.fileGridEl.style.overflowX = "hidden";
-      this.fileGridEl.style.gridTemplateColumns = "";
-      this.fileGridEl.style.gridAutoRows = "";
+      const mosaicWrapper = createElement("div", "vf-mosaic-wrapper");
+      Object.assign(mosaicWrapper.style, {
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: `${gap}px`,
+        width: "100%",
+        boxSizing: "border-box",
+      });
 
-      cols = [];
+      const cols = [];
       for (let i = 0; i < numCols; i++) {
         const col = createElement("div", "vf-mosaic-col");
         Object.assign(col.style, {
@@ -736,33 +879,38 @@ class EmbeddedFileExplorer {
           flexDirection: "column",
           gap: `${gap}px`,
         });
-        this.fileGridEl.appendChild(col);
+        mosaicWrapper.appendChild(col);
         cols.push(col);
       }
-    } else {
-      this._currentCols = null;
-      this.fileGridEl.style.display = "grid";
-      this.fileGridEl.style.gridTemplateColumns = "repeat(auto-fill, minmax(110px, 1fr))";
-      this.fileGridEl.style.gridAutoRows = this.showThumbnails ? "120px" : "85px";
-      this.fileGridEl.style.flexDirection = "";
-      this.fileGridEl.style.alignItems = "";
-      this.fileGridEl.style.gap = "8px";
-      this.fileGridEl.style.overflowY = "auto";
-      this.fileGridEl.style.overflowX = "hidden";
-    }
 
-    const appendItem = (card) => {
-      if (isMosaic && cols) {
+      let itemIdx = 0;
+      appendItem = (card) => {
         cols[itemIdx % numCols].appendChild(card);
         itemIdx++;
-      } else {
-        this.fileGridEl.appendChild(card);
-      }
-    };
+      };
+
+      this.fileGridEl.appendChild(mosaicWrapper);
+    } else {
+      this._currentCols = null;
+      const contentGrid = createElement("div", "vf-grid-content");
+      Object.assign(contentGrid.style, {
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
+        gridAutoRows: this.showThumbnails ? "120px" : "85px",
+        gap: "8px",
+        width: "100%",
+        boxSizing: "border-box",
+      });
+
+      appendItem = (card) => {
+        contentGrid.appendChild(card);
+      };
+
+      this.fileGridEl.appendChild(contentGrid);
+    }
 
     // Folders
-    this.dirs.forEach((dirName) => {
-      if (this.searchQuery && !dirName.toLowerCase().includes(this.searchQuery)) return;
+    visibleDirs.forEach((dirName) => {
       const card = createElement("div", "vf-card-dir");
       Object.assign(card.style, {
         background: "#1f1f28",
@@ -791,10 +939,10 @@ class EmbeddedFileExplorer {
     });
 
     // Files
-    this.files.forEach((file) => {
-      if (this.searchQuery && !file.name.toLowerCase().includes(this.searchQuery)) return;
+    visibleFiles.forEach((file) => {
+      const isSupported = isSupportedMediaFile(file);
       const card = createElement("div", "vf-card-file");
-      card.draggable = true;
+      card.draggable = isSupported;
       Object.assign(card.style, {
         background: "#1f1f28",
         border: "1px solid #2d2d3c",
@@ -804,15 +952,21 @@ class EmbeddedFileExplorer {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: isMosaic ? "flex-start" : "space-between",
-        gap: isMosaic ? "6px" : "0",
-        cursor: "pointer",
+        gap: isMosaic ? "4px" : "0",
+        cursor: isSupported ? "grab" : "pointer",
         position: "relative",
         boxSizing: "border-box",
         width: "100%",
+        userSelect: "none",
       });
 
       card.ondragstart = (e) => {
+        card.style.opacity = "0.5";
         setupDragPayload(e, file);
+      };
+      card.ondragend = () => {
+        card.style.opacity = "1";
+        clearDragPayload();
       };
 
       const thumb = createElement("div");
@@ -827,10 +981,12 @@ class EmbeddedFileExplorer {
         borderRadius: "3px",
         background: "#14141a",
         overflow: "hidden",
+        position: "relative",
       });
 
       if (this.showThumbnails && (file.media_type === "image" || file.media_type === "video")) {
         const img = document.createElement("img");
+        img.draggable = false;
         img.src = `/api/vf-file-nodes/thumbnail?path=${encodeURIComponent(file.path)}`;
         Object.assign(img.style, {
           width: "100%",
@@ -853,6 +1009,49 @@ class EmbeddedFileExplorer {
         thumb.innerHTML = '<span style="font-size: 24px;">📄</span>';
       }
 
+      // Metadata Badges on Thumbnail (only for supported files)
+      if (isSupported) {
+        if (file.duration != null && file.duration > 0) {
+          const durBadge = createElement("span", "vf-badge-duration", formatDuration(file.duration));
+          Object.assign(durBadge.style, {
+            position: "absolute",
+            bottom: "3px",
+            right: "3px",
+            background: "rgba(0, 0, 0, 0.75)",
+            color: "#fff",
+            padding: "1px 4px",
+            borderRadius: "3px",
+            fontSize: "9px",
+            fontWeight: "600",
+            lineHeight: "1.1",
+            fontFamily: "monospace",
+            pointerEvents: "none",
+            zIndex: "2",
+          });
+          thumb.appendChild(durBadge);
+        }
+
+        if (file.dimensions && Array.isArray(file.dimensions) && file.dimensions.length === 2) {
+          const dimBadge = createElement("span", "vf-badge-dimensions", `${file.dimensions[0]}×${file.dimensions[1]}`);
+          Object.assign(dimBadge.style, {
+            position: "absolute",
+            top: "3px",
+            left: "3px",
+            background: "rgba(0, 0, 0, 0.75)",
+            color: "#ddd",
+            padding: "1px 4px",
+            borderRadius: "3px",
+            fontSize: "9px",
+            fontWeight: "500",
+            lineHeight: "1.1",
+            fontFamily: "monospace",
+            pointerEvents: "none",
+            zIndex: "2",
+          });
+          thumb.appendChild(dimBadge);
+        }
+      }
+
       const label = createElement("div", "", file.name);
       Object.assign(label.style, {
         fontSize: "10px",
@@ -866,6 +1065,35 @@ class EmbeddedFileExplorer {
 
       card.appendChild(thumb);
       card.appendChild(label);
+
+      // Metadata Subtitle Line (creation date/time, dimensions, duration)
+      if (isSupported) {
+        const metaRow = createElement("div", "vf-card-meta");
+        Object.assign(metaRow.style, {
+          fontSize: "9px",
+          color: "#888",
+          marginTop: "2px",
+          width: "100%",
+          textAlign: "center",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          lineHeight: "1.2",
+        });
+        const metaParts = [];
+        if (file.ctime) metaParts.push(formatDateTime(file.ctime));
+        if (file.dimensions && Array.isArray(file.dimensions)) metaParts.push(`${file.dimensions[0]}×${file.dimensions[1]}`);
+        if (file.duration) metaParts.push(formatDuration(file.duration));
+        metaRow.textContent = metaParts.join(" • ");
+        card.appendChild(metaRow);
+
+        const tipParts = [`Name: ${file.name}`];
+        if (file.ctime) tipParts.push(`Created: ${new Date(file.ctime * 1000).toLocaleString()}`);
+        if (file.dimensions) tipParts.push(`Dimensions: ${file.dimensions[0]}×${file.dimensions[1]}`);
+        if (file.duration) tipParts.push(`Duration: ${formatDuration(file.duration)}`);
+        if (file.size) tipParts.push(`Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+        card.title = tipParts.join("\n");
+      }
 
       card.onclick = () => {
         this.fileGridEl.querySelectorAll(".vf-card-file").forEach((c) => {
@@ -883,6 +1111,16 @@ class EmbeddedFileExplorer {
 
       appendItem(card);
     });
+
+    // Friendly empty message if no files to view (placed BELOW the folders!)
+    if (visibleFiles.length === 0) {
+      const emptyInfo = getEmptyFolderMessage(this.activeFilter, this.searchQuery, visibleDirs.length > 0);
+      const emptyEl = createEmptyMessageEl(emptyInfo);
+      Object.assign(emptyEl.style, {
+        padding: "24px 16px",
+      });
+      this.fileGridEl.appendChild(emptyEl);
+    }
   }
 
   selectFile(file) {
@@ -908,14 +1146,500 @@ class EmbeddedFileExplorer {
   }
 
   openPreviewModal(file) {
-    let cleanupListeners = null;
+    return openPreviewModal(file);
+  }
+}
+
+function copyToClipboard(text, btn, successLabel = "Copied!") {
+  if (!text) return;
+  const doFeedback = () => {
+    if (btn) {
+      const orig = btn.innerHTML;
+      btn.innerHTML = `✓ ${successLabel}`;
+      setTimeout(() => {
+        btn.innerHTML = orig;
+      }, 1800);
+    }
+  };
+  if (navigator?.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(doFeedback).catch(() => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      doFeedback();
+    });
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+    doFeedback();
+  }
+}
+
+function buildSummaryText(params) {
+  const parts = [];
+  if (params.positive_prompt) {
+    parts.push(`Positive Prompt:\n${params.positive_prompt.trim()}\n`);
+  }
+  if (params.negative_prompt) {
+    parts.push(`Negative Prompt:\n${params.negative_prompt.trim()}\n`);
+  }
+  const settings = [];
+  if (params.steps != null) settings.push(`Steps: ${params.steps}`);
+  if (params.sampler != null) settings.push(`Sampler: ${params.sampler}`);
+  if (params.scheduler != null) settings.push(`Scheduler: ${params.scheduler}`);
+  if (params.cfg != null) settings.push(`CFG: ${params.cfg}`);
+  if (params.seed != null) settings.push(`Seed: ${params.seed}`);
+  if (params.denoise != null && params.denoise !== 1.0) settings.push(`Denoise: ${params.denoise}`);
+  if (params.models && params.models.length > 0) settings.push(`Model: ${params.models.join(", ")}`);
+  if (params.loras && params.loras.length > 0) {
+    const loraStrs = params.loras.map((l) => `${l.name} (${l.strength ?? 1.0})`);
+    settings.push(`LoRAs: ${loraStrs.join(", ")}`);
+  }
+  if (settings.length > 0) {
+    parts.push(settings.join(", "));
+  }
+  return parts.join("\n");
+}
+
+function setupParamsDrawer(drawerEl, params) {
+  drawerEl.innerHTML = "";
+
+  // Drawer Header
+  const header = createElement("div", "vf-params-drawer-header");
+  Object.assign(header.style, {
+    padding: "10px 14px",
+    background: "#1a1a24",
+    borderBottom: "1px solid #282836",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "8px",
+    flexShrink: "0",
+  });
+
+  const title = createElement("span", "", "⚙️ Parameters");
+  Object.assign(title.style, {
+    fontWeight: "600",
+    fontSize: "12px",
+    color: "#eee",
+  });
+  header.appendChild(title);
+
+  const actions = createElement("div");
+  Object.assign(actions.style, {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+  });
+
+  const copySummaryBtn = createElement("button", "", "📋 Copy All");
+  Object.assign(copySummaryBtn.style, {
+    background: "#252535",
+    border: "1px solid #3c3c4c",
+    borderRadius: "3px",
+    color: "#ccc",
+    fontSize: "10px",
+    padding: "3px 7px",
+    cursor: "pointer",
+    fontWeight: "500",
+  });
+  copySummaryBtn.onclick = () => copyToClipboard(buildSummaryText(params), copySummaryBtn);
+  actions.appendChild(copySummaryBtn);
+
+  if (params.has_workflow && params.workflow) {
+    const loadWfBtn = createElement("button", "", "📥 Load into Canvas");
+    Object.assign(loadWfBtn.style, {
+      background: "#0066cc",
+      border: "1px solid #0077ee",
+      borderRadius: "3px",
+      color: "#fff",
+      fontSize: "10px",
+      padding: "3px 7px",
+      cursor: "pointer",
+      fontWeight: "500",
+    });
+    loadWfBtn.onclick = () => {
+      try {
+        app.loadGraphData(params.workflow);
+        const orig = loadWfBtn.textContent;
+        loadWfBtn.textContent = "✓ Loaded!";
+        setTimeout(() => {
+          loadWfBtn.textContent = orig;
+        }, 2000);
+      } catch (err) {
+        console.error("[VF File Nodes] Failed to load workflow:", err);
+      }
+    };
+    actions.appendChild(loadWfBtn);
+  }
+
+  header.appendChild(actions);
+  drawerEl.appendChild(header);
+
+  // Drawer Body
+  const body = createElement("div", "vf-params-drawer-body");
+  Object.assign(body.style, {
+    flex: "1",
+    overflowY: "auto",
+    overflowX: "hidden",
+    padding: "12px 14px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+    boxSizing: "border-box",
+  });
+
+  // 1. Positive Prompt
+  if (params.positive_prompt) {
+    const section = createElement("div");
+    const labelRow = createElement("div");
+    Object.assign(labelRow.style, {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: "4px",
+    });
+    const label = createElement("span", "", "Positive Prompt");
+    Object.assign(label.style, {
+      fontSize: "11px",
+      fontWeight: "600",
+      color: "#66bb6a",
+    });
+    const copyBtn = createElement("button", "", "Copy");
+    Object.assign(copyBtn.style, {
+      background: "#252535",
+      border: "1px solid #3c3c4c",
+      borderRadius: "3px",
+      color: "#bbb",
+      fontSize: "10px",
+      padding: "1px 6px",
+      cursor: "pointer",
+    });
+    copyBtn.onclick = () => copyToClipboard(params.positive_prompt, copyBtn);
+    labelRow.appendChild(label);
+    labelRow.appendChild(copyBtn);
+
+    const textBox = createElement("div", "", params.positive_prompt);
+    Object.assign(textBox.style, {
+      background: "#0c0c14",
+      border: "1px solid #252535",
+      borderRadius: "4px",
+      padding: "8px 10px",
+      fontSize: "11px",
+      lineHeight: "1.4",
+      color: "#eee",
+      maxHeight: "130px",
+      overflowY: "auto",
+      userSelect: "text",
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word",
+    });
+    section.appendChild(labelRow);
+    section.appendChild(textBox);
+    body.appendChild(section);
+  }
+
+  // 2. Negative Prompt
+  if (params.negative_prompt) {
+    const section = createElement("div");
+    const labelRow = createElement("div");
+    Object.assign(labelRow.style, {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: "4px",
+    });
+    const label = createElement("span", "", "Negative Prompt");
+    Object.assign(label.style, {
+      fontSize: "11px",
+      fontWeight: "600",
+      color: "#ef5350",
+    });
+    const copyBtn = createElement("button", "", "Copy");
+    Object.assign(copyBtn.style, {
+      background: "#252535",
+      border: "1px solid #3c3c4c",
+      borderRadius: "3px",
+      color: "#bbb",
+      fontSize: "10px",
+      padding: "1px 6px",
+      cursor: "pointer",
+    });
+    copyBtn.onclick = () => copyToClipboard(params.negative_prompt, copyBtn);
+    labelRow.appendChild(label);
+    labelRow.appendChild(copyBtn);
+
+    const textBox = createElement("div", "", params.negative_prompt);
+    Object.assign(textBox.style, {
+      background: "#140e10",
+      border: "1px solid #381e22",
+      borderRadius: "4px",
+      padding: "8px 10px",
+      fontSize: "11px",
+      lineHeight: "1.4",
+      color: "#e0bbbb",
+      maxHeight: "90px",
+      overflowY: "auto",
+      userSelect: "text",
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word",
+    });
+    section.appendChild(labelRow);
+    section.appendChild(textBox);
+    body.appendChild(section);
+  }
+
+  // 3. Settings Grid
+  const gridItems = [];
+  if (params.seed != null) gridItems.push({ label: "Seed", value: String(params.seed), copyable: true });
+  if (params.steps != null) gridItems.push({ label: "Steps", value: String(params.steps) });
+  if (params.cfg != null) gridItems.push({ label: "CFG", value: String(params.cfg) });
+  if (params.sampler != null) gridItems.push({ label: "Sampler", value: String(params.sampler) });
+  if (params.scheduler != null) gridItems.push({ label: "Scheduler", value: String(params.scheduler) });
+  if (params.denoise != null) gridItems.push({ label: "Denoise", value: String(params.denoise) });
+
+  if (gridItems.length > 0) {
+    const gridEl = createElement("div");
+    Object.assign(gridEl.style, {
+      display: "grid",
+      gridTemplateColumns: "repeat(2, 1fr)",
+      gap: "6px",
+    });
+
+    gridItems.forEach((item) => {
+      const cell = createElement("div");
+      Object.assign(cell.style, {
+        background: "#181824",
+        border: "1px solid #282838",
+        borderRadius: "4px",
+        padding: "6px 8px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "2px",
+        minWidth: "0",
+      });
+      const lblRow = createElement("div");
+      Object.assign(lblRow.style, {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+      });
+      const lbl = createElement("span", "", item.label);
+      Object.assign(lbl.style, {
+        fontSize: "9px",
+        fontWeight: "600",
+        textTransform: "uppercase",
+        letterSpacing: "0.5px",
+        color: "#888",
+      });
+      lblRow.appendChild(lbl);
+
+      if (item.copyable) {
+        const miniCopy = createElement("span", "", "📋");
+        miniCopy.title = "Copy Seed";
+        Object.assign(miniCopy.style, {
+          fontSize: "10px",
+          cursor: "pointer",
+          opacity: "0.6",
+        });
+        miniCopy.onmouseenter = () => { miniCopy.style.opacity = "1"; };
+        miniCopy.onmouseleave = () => { miniCopy.style.opacity = "0.6"; };
+        miniCopy.onclick = (e) => {
+          e.stopPropagation();
+          copyToClipboard(item.value, miniCopy, "✓");
+        };
+        lblRow.appendChild(miniCopy);
+      }
+
+      const val = createElement("span", "", item.value);
+      Object.assign(val.style, {
+        fontSize: "11px",
+        fontFamily: "monospace",
+        color: "#eee",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        userSelect: "text",
+      });
+      val.title = item.value;
+
+      cell.appendChild(lblRow);
+      cell.appendChild(val);
+      gridEl.appendChild(cell);
+    });
+    body.appendChild(gridEl);
+  }
+
+  // 4. Models
+  if (params.models && params.models.length > 0) {
+    const modelSection = createElement("div");
+    const mLabel = createElement("div", "", "Model");
+    Object.assign(mLabel.style, {
+      fontSize: "9px",
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: "0.5px",
+      color: "#888",
+      marginBottom: "4px",
+    });
+    modelSection.appendChild(mLabel);
+    params.models.forEach((m) => {
+      const pill = createElement("div", "", m);
+      Object.assign(pill.style, {
+        background: "#181824",
+        border: "1px solid #282838",
+        borderRadius: "4px",
+        padding: "4px 8px",
+        fontSize: "11px",
+        fontFamily: "monospace",
+        color: "#88ccff",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        marginBottom: "4px",
+        userSelect: "text",
+      });
+      pill.title = m;
+      modelSection.appendChild(pill);
+    });
+    body.appendChild(modelSection);
+  }
+
+  // 5. LoRAs
+  if (params.loras && params.loras.length > 0) {
+    const loraSection = createElement("div");
+    const lLabel = createElement("div", "", "LoRAs");
+    Object.assign(lLabel.style, {
+      fontSize: "9px",
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: "0.5px",
+      color: "#888",
+      marginBottom: "4px",
+    });
+    loraSection.appendChild(lLabel);
+    params.loras.forEach((l) => {
+      const lRow = createElement("div");
+      Object.assign(lRow.style, {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        background: "#181824",
+        border: "1px solid #282838",
+        borderRadius: "4px",
+        padding: "4px 8px",
+        marginBottom: "4px",
+        gap: "6px",
+      });
+      const lName = createElement("span", "", l.name);
+      Object.assign(lName.style, {
+        fontSize: "11px",
+        fontFamily: "monospace",
+        color: "#ffcc66",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        flex: "1",
+        userSelect: "text",
+      });
+      lName.title = l.name;
+      const lStrength = createElement("span", "", `${l.strength ?? 1.0}`);
+      Object.assign(lStrength.style, {
+        fontSize: "10px",
+        fontFamily: "monospace",
+        color: "#aaa",
+        background: "rgba(255,255,255,0.06)",
+        padding: "1px 5px",
+        borderRadius: "3px",
+        flexShrink: "0",
+      });
+      lRow.appendChild(lName);
+      lRow.appendChild(lStrength);
+      loraSection.appendChild(lRow);
+    });
+    body.appendChild(loraSection);
+  }
+
+  // 6. Raw Data (JSON)
+  const details = createElement("details");
+  Object.assign(details.style, {
+    border: "1px solid #282838",
+    borderRadius: "4px",
+    padding: "6px 8px",
+    background: "#101018",
+    marginTop: "2px",
+  });
+  const summary = createElement("summary", "", "Raw Data (JSON)");
+  Object.assign(summary.style, {
+    fontSize: "10px",
+    fontWeight: "600",
+    color: "#888",
+    cursor: "pointer",
+    outline: "none",
+    userSelect: "none",
+  });
+  details.appendChild(summary);
+
+  const jsonBtnRow = createElement("div");
+  Object.assign(jsonBtnRow.style, {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "6px",
+    marginTop: "8px",
+  });
+
+  if (params.workflow) {
+    const copyWfBtn = createElement("button", "", "Copy Workflow JSON");
+    Object.assign(copyWfBtn.style, {
+      background: "#20202e",
+      border: "1px solid #38384e",
+      borderRadius: "3px",
+      color: "#bbb",
+      fontSize: "10px",
+      padding: "3px 7px",
+      cursor: "pointer",
+    });
+    copyWfBtn.onclick = () => copyToClipboard(JSON.stringify(params.workflow, null, 2), copyWfBtn);
+    jsonBtnRow.appendChild(copyWfBtn);
+  }
+
+  if (params.prompt) {
+    const copyPrBtn = createElement("button", "", "Copy Prompt JSON");
+    Object.assign(copyPrBtn.style, {
+      background: "#20202e",
+      border: "1px solid #38384e",
+      borderRadius: "3px",
+      color: "#bbb",
+      fontSize: "10px",
+      padding: "3px 7px",
+      cursor: "pointer",
+    });
+    copyPrBtn.onclick = () => copyToClipboard(JSON.stringify(params.prompt, null, 2), copyPrBtn);
+    jsonBtnRow.appendChild(copyPrBtn);
+  }
+
+  details.appendChild(jsonBtnRow);
+  body.appendChild(details);
+
+  drawerEl.appendChild(body);
+}
+
+export function openPreviewModal(file) {
+  let cleanupListeners = null;
     const { backdrop, close } = makeModalBackdrop({
       zIndex: 10100,
       onClose: () => cleanupListeners?.(),
     });
     const content = createElement("div");
     Object.assign(content.style, {
-      maxWidth: "90vw",
+      maxWidth: "94vw",
       maxHeight: "90vh",
       background: "#181820",
       borderRadius: "8px",
@@ -934,8 +1658,65 @@ class EmbeddedFileExplorer {
       display: "flex",
       justifyContent: "space-between",
       alignItems: "center",
+      gap: "12px",
     });
-    header.innerHTML = `<span style="font-size: 13px; font-weight: 600;">${file.name}</span>`;
+
+    const titleGroup = createElement("div");
+    Object.assign(titleGroup.style, {
+      display: "flex",
+      flexDirection: "column",
+      gap: "4px",
+      minWidth: "0",
+      flex: "1",
+    });
+
+    const titleEl = createElement("div", "", file.name);
+    Object.assign(titleEl.style, {
+      fontSize: "13px",
+      fontWeight: "600",
+      color: "#eee",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+    titleGroup.appendChild(titleEl);
+
+    const metaRow = createElement("div", "vf-modal-meta-row");
+    Object.assign(metaRow.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      fontSize: "11px",
+      color: "#aaa",
+      flexWrap: "wrap",
+      lineHeight: "1.2",
+    });
+    titleGroup.appendChild(metaRow);
+
+    const headerActions = createElement("div", "vf-modal-header-actions");
+    Object.assign(headerActions.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      flexShrink: "0",
+    });
+
+    const paramsBtn = createElement("button", "vf-modal-params-btn");
+    paramsBtn.innerHTML = `⚙️ Parameters`;
+    Object.assign(paramsBtn.style, {
+      background: "#282834",
+      border: "1px solid #3c3c4c",
+      borderRadius: "4px",
+      color: "#ccc",
+      fontSize: "11px",
+      fontWeight: "500",
+      padding: "4px 9px",
+      cursor: "pointer",
+      display: "none",
+      alignItems: "center",
+      gap: "5px",
+      transition: "all 0.15s ease",
+    });
 
     const closeBtn = createElement("button", "", "✕");
     Object.assign(closeBtn.style, {
@@ -944,13 +1725,99 @@ class EmbeddedFileExplorer {
       color: "#aaa",
       fontSize: "16px",
       cursor: "pointer",
+      padding: "4px 8px",
+      flexShrink: "0",
     });
     closeBtn.onclick = () => {
       cleanupListeners?.();
       close();
     };
-    header.appendChild(closeBtn);
+
+    headerActions.appendChild(paramsBtn);
+    headerActions.appendChild(closeBtn);
+    header.appendChild(titleGroup);
+    header.appendChild(headerActions);
     content.appendChild(header);
+
+    let currentDimensions = file.dimensions && Array.isArray(file.dimensions) ? file.dimensions : null;
+    let currentDuration = file.duration && file.duration > 0 ? file.duration : null;
+
+    const renderMeta = () => {
+      metaRow.innerHTML = "";
+      const isSupported = isSupportedMediaFile(file);
+      if (!isSupported) return;
+
+      // 1. Dimensions badge (e.g. 1920×1080)
+      if (currentDimensions && currentDimensions.length === 2 && currentDimensions[0] > 0) {
+        const dimBadge = createElement("span", "vf-badge-dimensions", `${currentDimensions[0]}×${currentDimensions[1]}`);
+        Object.assign(dimBadge.style, {
+          background: "rgba(255, 255, 255, 0.08)",
+          border: "1px solid rgba(255, 255, 255, 0.15)",
+          borderRadius: "3px",
+          padding: "1px 6px",
+          fontSize: "10px",
+          fontFamily: "monospace",
+          fontWeight: "500",
+          color: "#ddd",
+        });
+        metaRow.appendChild(dimBadge);
+      }
+
+      // 2. Duration badge (e.g. 0:05)
+      if (currentDuration != null && currentDuration > 0) {
+        const durBadge = createElement("span", "vf-badge-duration", formatDuration(currentDuration));
+        Object.assign(durBadge.style, {
+          background: "rgba(255, 255, 255, 0.08)",
+          border: "1px solid rgba(255, 255, 255, 0.15)",
+          borderRadius: "3px",
+          padding: "1px 6px",
+          fontSize: "10px",
+          fontFamily: "monospace",
+          fontWeight: "600",
+          color: "#ddd",
+        });
+        metaRow.appendChild(durBadge);
+      }
+
+      // 3. Creation date/time
+      const timeVal = file.ctime || file.mtime;
+      if (timeVal) {
+        const timeSpan = createElement("span", "vf-modal-meta-time", formatDateTime(timeVal));
+        Object.assign(timeSpan.style, {
+          color: "#999",
+          fontSize: "11px",
+        });
+        metaRow.appendChild(timeSpan);
+      }
+
+      // 4. File size
+      if (file.size != null && file.size > 0) {
+        const sizeStr = file.size > 1024 * 1024
+          ? `${(file.size / (1024 * 1024)).toFixed(2)} MB`
+          : `${(file.size / 1024).toFixed(1)} KB`;
+        const sizeSpan = createElement("span", "vf-modal-meta-size", `•  ${sizeStr}`);
+        Object.assign(sizeSpan.style, {
+          color: "#888",
+          fontSize: "11px",
+        });
+        metaRow.appendChild(sizeSpan);
+      }
+    };
+
+    renderMeta();
+
+    ensureSpinnerStyles();
+
+    const mainContainer = createElement("div", "vf-modal-main-container");
+    Object.assign(mainContainer.style, {
+      display: "flex",
+      flexDirection: "row",
+      flex: "1",
+      minHeight: "0",
+      minWidth: "0",
+      overflow: "hidden",
+      position: "relative",
+    });
 
     const body = createElement("div");
     Object.assign(body.style, {
@@ -958,10 +1825,99 @@ class EmbeddedFileExplorer {
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      minWidth: "300px",
-      minHeight: "200px",
+      minWidth: "320px",
+      minHeight: "220px",
       position: "relative",
+      flex: "1",
+      overflow: "hidden",
     });
+
+    const paramsDrawer = createElement("div", "vf-modal-params-drawer");
+    Object.assign(paramsDrawer.style, {
+      width: "360px",
+      maxWidth: "45vw",
+      minWidth: "280px",
+      background: "#14141c",
+      borderLeft: "1px solid #2a2a38",
+      display: "none",
+      flexDirection: "column",
+      flexShrink: "0",
+      overflow: "hidden",
+      boxSizing: "border-box",
+    });
+
+    let currentParams = null;
+    let isParamsOpen = true;
+    try {
+      const saved = localStorage.getItem("vf_file_nodes_show_parameters");
+      if (saved !== null) {
+        isParamsOpen = saved !== "false";
+      }
+    } catch (e) {}
+
+    const updateParamsToggleState = () => {
+      paramsDrawer.style.display = isParamsOpen ? "flex" : "none";
+      paramsBtn.style.background = isParamsOpen ? "#0066cc" : "#282834";
+      paramsBtn.style.color = isParamsOpen ? "#fff" : "#ccc";
+      paramsBtn.style.borderColor = isParamsOpen ? "#0077ee" : "#3c3c4c";
+    };
+
+    paramsBtn.onmouseenter = () => {
+      if (!isParamsOpen) paramsBtn.style.background = "#333344";
+    };
+    paramsBtn.onmouseleave = () => {
+      if (!isParamsOpen) paramsBtn.style.background = "#282834";
+    };
+
+    paramsBtn.onclick = () => {
+      isParamsOpen = !isParamsOpen;
+      try {
+        localStorage.setItem("vf_file_nodes_show_parameters", isParamsOpen ? "true" : "false");
+      } catch (e) {}
+      updateParamsToggleState();
+    };
+
+    fetch(`/api/vf-file-nodes/comfy-parameters?path=${encodeURIComponent(file.path)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data || !data.has_parameters) return;
+        currentParams = data;
+        paramsBtn.style.display = "inline-flex";
+        setupParamsDrawer(paramsDrawer, data);
+        updateParamsToggleState();
+      })
+      .catch((err) => {
+        console.debug("[VF File Nodes] ComfyUI parameters fetch error:", err);
+      });
+
+    const spinner = createElement("div", "vf-modal-spinner");
+    Object.assign(spinner.style, {
+      position: "absolute",
+      inset: "0",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "12px",
+      color: "#aaa",
+      fontSize: "12px",
+      zIndex: "5",
+      background: "#181820",
+      minHeight: "220px",
+      minWidth: "320px",
+    });
+    spinner.innerHTML = `
+      <div style="
+        width: 36px;
+        height: 36px;
+        border: 3px solid rgba(255, 255, 255, 0.12);
+        border-top-color: #0088ff;
+        border-radius: 50%;
+        animation: vf-spin 0.8s linear infinite;
+      "></div>
+      <div style="font-weight: 500; color: #aaa;">Loading preview...</div>
+    `;
+    body.appendChild(spinner);
 
     if (file.media_type === "image") {
       const imageContainer = createElement("div", "vf-modal-image-container");
@@ -971,16 +1927,31 @@ class EmbeddedFileExplorer {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        maxWidth: "85vw",
+        maxWidth: "100%",
         maxHeight: "75vh",
         borderRadius: "4px",
+        opacity: "0",
+        transition: "opacity 0.15s ease-in",
       });
       imageContainer.title = "🔍 Use scroll wheel to zoom (up to 4x)";
 
       const img = document.createElement("img");
       img.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`;
+      img.onload = () => {
+        spinner.remove();
+        imageContainer.style.opacity = "1";
+        if (img.naturalWidth && img.naturalHeight) {
+          if (!currentDimensions || currentDimensions[0] !== img.naturalWidth || currentDimensions[1] !== img.naturalHeight) {
+            currentDimensions = [img.naturalWidth, img.naturalHeight];
+            renderMeta();
+          }
+        }
+      };
+      img.onerror = () => {
+        spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load image preview</span>`;
+      };
       Object.assign(img.style, {
-        maxWidth: "85vw",
+        maxWidth: "100%",
         maxHeight: "75vh",
         objectFit: "contain",
         transformOrigin: "center center",
@@ -1116,14 +2087,52 @@ class EmbeddedFileExplorer {
       video.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`;
       video.controls = true;
       video.autoplay = true;
-      video.style.maxWidth = "80vw";
+      video.style.maxWidth = "100%";
       video.style.maxHeight = "75vh";
+      video.style.opacity = "0";
+      video.style.transition = "opacity 0.15s ease-in";
+      video.onloadeddata = () => {
+        spinner.remove();
+        video.style.opacity = "1";
+        let changed = false;
+        if (video.videoWidth && video.videoHeight) {
+          if (!currentDimensions || currentDimensions[0] !== video.videoWidth || currentDimensions[1] !== video.videoHeight) {
+            currentDimensions = [video.videoWidth, video.videoHeight];
+            changed = true;
+          }
+        }
+        if (video.duration && !isNaN(video.duration) && video.duration > 0) {
+          if (!currentDuration || Math.abs(currentDuration - video.duration) > 0.5) {
+            currentDuration = video.duration;
+            changed = true;
+          }
+        }
+        if (changed) renderMeta();
+      };
+      video.onerror = () => {
+        spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load video preview</span>`;
+      };
       body.appendChild(video);
     } else if (file.media_type === "audio") {
       const audio = document.createElement("audio");
       audio.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`;
       audio.controls = true;
       audio.autoplay = true;
+      audio.style.opacity = "0";
+      audio.style.transition = "opacity 0.15s ease-in";
+      audio.onloadeddata = () => {
+        spinner.remove();
+        audio.style.opacity = "1";
+        if (audio.duration && !isNaN(audio.duration) && audio.duration > 0) {
+          if (!currentDuration || Math.abs(currentDuration - audio.duration) > 0.5) {
+            currentDuration = audio.duration;
+            renderMeta();
+          }
+        }
+      };
+      audio.onerror = () => {
+        spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load audio preview</span>`;
+      };
       body.appendChild(audio);
     } else {
       const pre = createElement("pre");
@@ -1136,15 +2145,33 @@ class EmbeddedFileExplorer {
         background: "#101014",
         padding: "12px",
         borderRadius: "4px",
+        opacity: "0",
+        transition: "opacity 0.15s ease-in",
       });
       fetch(`/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`)
-        .then((r) => r.text())
-        .then((t) => { pre.textContent = t.slice(0, 50000); });
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.text();
+        })
+        .then((t) => {
+          spinner.remove();
+          pre.textContent = t.slice(0, 50000);
+          pre.style.opacity = "1";
+          const lines = t.split("\n").length;
+          const lineSpan = createElement("span", "vf-modal-meta-lines", `•  ${lines} lines`);
+          Object.assign(lineSpan.style, { color: "#888", fontSize: "11px" });
+          metaRow.appendChild(lineSpan);
+        })
+        .catch(() => {
+          spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load text preview</span>`;
+        });
       body.appendChild(pre);
     }
 
-    content.appendChild(body);
+    mainContainer.appendChild(body);
+    mainContainer.appendChild(paramsDrawer);
+    content.appendChild(mainContainer);
     backdrop.appendChild(content);
     document.body.appendChild(backdrop);
   }
-}
+
