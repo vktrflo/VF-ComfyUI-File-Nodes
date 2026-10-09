@@ -1749,14 +1749,34 @@ export function openPreviewModal(file) {
     });
 
     let currentParams = null;
-    let isParamsOpen = false;
+    let isParamsOpen = true;
+    try {
+      const saved = localStorage.getItem("vf_file_nodes_show_parameters");
+      if (saved !== null) {
+        isParamsOpen = saved !== "false";
+      }
+    } catch (e) {}
 
-    paramsBtn.onclick = () => {
-      isParamsOpen = !isParamsOpen;
+    const updateParamsToggleState = () => {
       paramsDrawer.style.display = isParamsOpen ? "flex" : "none";
       paramsBtn.style.background = isParamsOpen ? "#0066cc" : "#282834";
       paramsBtn.style.color = isParamsOpen ? "#fff" : "#ccc";
       paramsBtn.style.borderColor = isParamsOpen ? "#0077ee" : "#3c3c4c";
+    };
+
+    paramsBtn.onmouseenter = () => {
+      if (!isParamsOpen) paramsBtn.style.background = "#333344";
+    };
+    paramsBtn.onmouseleave = () => {
+      if (!isParamsOpen) paramsBtn.style.background = "#282834";
+    };
+
+    paramsBtn.onclick = () => {
+      isParamsOpen = !isParamsOpen;
+      try {
+        localStorage.setItem("vf_file_nodes_show_parameters", isParamsOpen ? "true" : "false");
+      } catch (e) {}
+      updateParamsToggleState();
     };
 
     fetch(`/api/vf-file-nodes/comfy-parameters?path=${encodeURIComponent(file.path)}`)
@@ -1766,6 +1786,7 @@ export function openPreviewModal(file) {
         currentParams = data;
         paramsBtn.style.display = "inline-flex";
         setupParamsDrawer(paramsDrawer, data);
+        updateParamsToggleState();
       })
       .catch((err) => {
         console.debug("[VF File Nodes] ComfyUI parameters fetch error:", err);
