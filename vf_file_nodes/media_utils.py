@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import os
+import json
 import math
+import os
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -345,3 +346,250 @@ def decode_video_segment(
     except Exception as exc:
         print(f"[VF File Nodes] Video decode error {video_path}: {exc}")
         return empty_res
+
+
+def extract_comfy_parameters(file_path: str | Path) -> dict[str, Any]:
+    """Extract embedded ComfyUI parameters, prompt, and workflow from an image or video."""
+    p = Path(file_path)
+    if not p.is_file():
+        return {"has_parameters": False, "error": "File not found"}
+
+    prompt_data: dict[str, Any] | None = None
+    workflow_data: dict[str, Any] | None = None
+
+    suffix = p.suffix.lower()
+    try:
+        if suffix in {".png", ".webp", ".jpg", ".jpeg", ".tiff"}:
+            with Image.open(str(p)) as img:
+                info = getattr(img, "info", {}) or {}
+                if "prompt" in info:
+                    raw = info["prompt"]
+                    prompt_data = json.loads(raw) if isinstance(raw, str) else raw
+                if "workflow" in info:
+                    raw = info["workflow"]
+                    workflow_data = json.loads(raw) if isinstance(raw, str) else raw
+                if prompt_data is None and workflow_data is None and hasattr(img, "getexif"):
+                    exif = img.getexif()
+                    if exif:
+                        for tag_id in (0x9286, 0x010E):  # UserComment, ImageDescription
+                            val = exif.get(tag_id)
+                            if isinstance(val, (bytes, str)):
+                                try:
+                                    s = val.decode("utf-8", errors="ignore") if isinstance(val, bytes) else val
+                                    if s.startswith("UNICODE"):
+                                        s = s[7:].strip("\x00")
+                                    parsed = json.loads(s)
+                                    if isinstance(parsed, dict):
+                                        if "nodes" in parsed or "extra" in parsed:
+                                            workflow_data = parsed
+                                        if "prompt" in parsed:
+                                            prompt_data = parsed["prompt"]
+                                        if "workflow" in parsed:
+                                            workflow_data = parsed["workflow"]
+                                except Exception:
+                                    pass
+        elif suffix in {".mp4", ".webm", ".mkv", ".mov"}:
+            if av is not None:
+                with av.open(str(p)) as container:
+                    meta = getattr(container, "metadata", {}) or {}
+                    if "prompt" in meta:
+                        raw = meta["prompt"]
+                        prompt_data = json.loads(raw) if isinstance(raw, str) else raw
+                    if "workflow" in meta:
+                        raw = meta["workflow"]
+                        workflow_data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return {"has_parameters": False}
+
+    if not prompt_data and not workflow_data:
+        return {"has_parameters": False}
+
+    def resolve_val(v: Any, visited: set[str] | None = None) -> Any:
+        if visited is None:
+            visited = set()
+        if prompt_data and isinstance(v, list) and len(v) == 2 and str(v[0]) in prompt_data:
+            nid = str(v[0])
+            if nid in visited:
+                return None
+            visited.add(nid)
+            ref_node = prompt_data[nid]
+            ref_inputs = ref_node.get("inputs", {}) if isinstance(ref_node, dict) else {}
+            ct = ref_node.get("class_type", "") if isinstance(ref_node, dict) else ""
+            if "Primitive" in ct and "value" in ref_inputs:
+                return resolve_val(ref_inputs["value"], visited)
+            for k in ("noise_seed", "seed", "sampler_name", "scheduler", "steps", "cfg", "text", "value"):
+                if k in ref_inputs:
+                    return resolve_val(ref_inputs[k], visited)
+        return v
+
+    def extract_prompt_text(cond_ref: Any, is_negative: bool = False, visited: set[tuple[str, Any]] | None = None) -> str | None:
+        if visited is None:
+            visited = set()
+        if isinstance(cond_ref, str):
+            return cond_ref
+        if not prompt_data or not isinstance(cond_ref, list) or len(cond_ref) != 2:
+            return None
+        nid, slot = str(cond_ref[0]), cond_ref[1]
+        if (nid, slot) in visited or nid not in prompt_data:
+            return None
+        visited.add((nid, slot))
+        node = prompt_data[nid]
+        if not isinstance(node, dict):
+            return None
+        inp = node.get("inputs", {})
+        ct = node.get("class_type", "")
+
+        if ct in ("PrimitiveString", "PrimitiveStringMultiline") and "value" in inp:
+            v = inp["value"]
+            return extract_prompt_text(v, is_negative, visited) if isinstance(v, list) else str(v)
+        if ct == "CLIPTextEncode" and "text" in inp:
+            v = inp["text"]
+            return extract_prompt_text(v, is_negative, visited) if isinstance(v, list) else str(v)
+        if ct == "PixaromaPrompt" and "PromptState" in inp:
+            try:
+                ps = json.loads(inp["PromptState"])
+                if isinstance(ps, dict) and "text" in ps:
+                    return str(ps["text"])
+            except Exception:
+                pass
+        if "text" in inp and isinstance(inp["text"], str):
+            return inp["text"]
+
+        keys = ["negative", "conditioning"] if is_negative else ["positive", "prompt", "conditioning"]
+        for k in keys:
+            if k in inp:
+                res = extract_prompt_text(inp[k], is_negative, visited)
+                if res:
+                    return res
+        return None
+
+    seed: Any = None
+    steps: Any = None
+    cfg: Any = None
+    sampler: Any = None
+    scheduler: Any = None
+    denoise: Any = None
+    positive_prompt: str | None = None
+    negative_prompt: str | None = None
+    models: list[str] = []
+    loras: list[dict[str, Any]] = []
+
+    if prompt_data and isinstance(prompt_data, dict):
+        for nid, node in prompt_data.items():
+            if not isinstance(node, dict):
+                continue
+            ct = node.get("class_type", "")
+            inp = node.get("inputs", {})
+            if not isinstance(inp, dict):
+                continue
+
+            # Sampler nodes
+            if "Sampler" in ct:
+                if "seed" in inp and seed is None:
+                    seed = resolve_val(inp["seed"])
+                if "noise_seed" in inp and seed is None:
+                    seed = resolve_val(inp["noise_seed"])
+                if "noise" in inp and seed is None:
+                    seed = resolve_val(inp["noise"])
+                if "steps" in inp and steps is None:
+                    steps = resolve_val(inp["steps"])
+                if "cfg" in inp and cfg is None:
+                    cfg = resolve_val(inp["cfg"])
+                if "sampler_name" in inp and sampler is None:
+                    sampler = resolve_val(inp["sampler_name"])
+                if "sampler" in inp and sampler is None:
+                    sampler = resolve_val(inp["sampler"])
+                if "scheduler" in inp and scheduler is None:
+                    scheduler = resolve_val(inp["scheduler"])
+                if "denoise" in inp and denoise is None:
+                    denoise = resolve_val(inp["denoise"])
+
+                # sigmas link -> scheduler node
+                if "sigmas" in inp and isinstance(inp["sigmas"], list) and str(inp["sigmas"][0]) in prompt_data:
+                    sn = prompt_data[str(inp["sigmas"][0])]
+                    if isinstance(sn, dict):
+                        sinp = sn.get("inputs", {})
+                        if "scheduler" in sinp and scheduler is None:
+                            scheduler = resolve_val(sinp["scheduler"])
+                        if "steps" in sinp and steps is None:
+                            steps = resolve_val(sinp["steps"])
+                        if "denoise" in sinp and denoise is None:
+                            denoise = resolve_val(sinp["denoise"])
+
+                # guider link -> CFGGuider / BasicGuider
+                if "guider" in inp and isinstance(inp["guider"], list) and str(inp["guider"][0]) in prompt_data:
+                    gn = prompt_data[str(inp["guider"][0])]
+                    if isinstance(gn, dict):
+                        ginp = gn.get("inputs", {})
+                        if "cfg" in ginp and cfg is None:
+                            cfg = resolve_val(ginp["cfg"])
+                        if "positive" in ginp and positive_prompt is None:
+                            positive_prompt = extract_prompt_text(ginp["positive"], is_negative=False)
+                        elif "conditioning" in ginp and positive_prompt is None:
+                            positive_prompt = extract_prompt_text(ginp["conditioning"], is_negative=False)
+                        if "negative" in ginp and negative_prompt is None:
+                            negative_prompt = extract_prompt_text(ginp["negative"], is_negative=True)
+
+                # direct positive/negative conditioning links
+                if "positive" in inp and positive_prompt is None:
+                    positive_prompt = extract_prompt_text(inp["positive"], is_negative=False)
+                if "negative" in inp and negative_prompt is None:
+                    negative_prompt = extract_prompt_text(inp["negative"], is_negative=True)
+
+            # Model loaders
+            for mkey in ("ckpt_name", "unet_name", "model_name"):
+                if mkey in inp and isinstance(inp[mkey], str) and inp[mkey] not in models:
+                    models.append(inp[mkey])
+
+            # LoRAs
+            if "lora_name" in inp and isinstance(inp["lora_name"], str):
+                st = inp.get("strength_model", 1.0)
+                loras.append({"name": inp["lora_name"], "strength": st})
+            if "lora_stack_data" in inp:
+                lsd = inp["lora_stack_data"]
+                if isinstance(lsd, str):
+                    try:
+                        lsd = json.loads(lsd)
+                    except Exception:
+                        pass
+                if isinstance(lsd, list):
+                    for item in lsd:
+                        if isinstance(item, dict) and "lora_name" in item:
+                            loras.append({"name": item.get("lora_name"), "strength": item.get("strength_model", 1.0)})
+
+        # Fallback for positive/negative prompt if not linked to a sampler
+        if positive_prompt is None:
+            for nid, node in prompt_data.items():
+                if not isinstance(node, dict):
+                    continue
+                ct = node.get("class_type", "")
+                inp = node.get("inputs", {})
+                if ct == "CLIPTextEncode" and "text" in inp and isinstance(inp["text"], str):
+                    t = inp["text"].strip()
+                    if t and positive_prompt is None:
+                        positive_prompt = t
+                elif ct == "PixaromaPrompt" and "PromptState" in inp:
+                    try:
+                        ps = json.loads(inp["PromptState"])
+                        if isinstance(ps, dict) and "text" in ps and positive_prompt is None:
+                            positive_prompt = str(ps["text"])
+                    except Exception:
+                        pass
+
+    return {
+        "has_parameters": True,
+        "positive_prompt": positive_prompt,
+        "negative_prompt": negative_prompt,
+        "seed": seed,
+        "steps": steps,
+        "cfg": cfg,
+        "sampler": sampler,
+        "scheduler": scheduler,
+        "denoise": denoise,
+        "models": models,
+        "loras": loras,
+        "has_workflow": workflow_data is not None,
+        "workflow": workflow_data,
+        "prompt": prompt_data,
+    }
+

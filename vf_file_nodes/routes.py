@@ -22,6 +22,7 @@ from .media_utils import (
     TEXT_EXTENSIONS,
     VIDEO_EXTENSIONS,
     classify_media_type,
+    extract_comfy_parameters,
 )
 
 try:
@@ -42,6 +43,10 @@ MAX_THUMB_CACHE_SIZE = 1000
 # Metadata cache: path -> (mtime, size, meta_dict)
 _METADATA_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
 MAX_META_CACHE_SIZE = 10000
+
+# ComfyUI parameters cache: path -> (mtime, size, params_dict)
+_COMFY_PARAMS_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
+MAX_PARAMS_CACHE_SIZE = 1000
 
 _DISK_CACHE_DIR: Path | None = None
 
@@ -531,6 +536,34 @@ async def handle_remove_favorite(request: web.Request) -> web.Response:
     return web.json_response({"success": True, "favorites": favs})
 
 
+async def handle_comfy_parameters(request: web.Request) -> web.Response:
+    """Return embedded ComfyUI parameters (prompt, negative, sampler settings, workflow)."""
+    file_path = str(request.query.get("path", "")).strip()
+    if not file_path:
+        return web.json_response({"has_parameters": False, "error": "Path required"}, status=400)
+
+    p = Path(file_path)
+    if not p.is_file():
+        return web.json_response({"has_parameters": False, "error": "File not found"}, status=200)
+
+    try:
+        st = p.stat()
+        cached = _COMFY_PARAMS_CACHE.get(str(p))
+        if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+            return web.json_response(cached[2])
+    except Exception:
+        return web.json_response({"has_parameters": False, "error": "Cannot read file"}, status=200)
+
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, extract_comfy_parameters, str(p))
+
+    if len(_COMFY_PARAMS_CACHE) > MAX_PARAMS_CACHE_SIZE:
+        _COMFY_PARAMS_CACHE.clear()
+    _COMFY_PARAMS_CACHE[str(p)] = (st.st_mtime, st.st_size, res)
+
+    return web.json_response(res)
+
+
 def setup_routes(app: web.Application) -> None:
     """Register all routes on an aiohttp application."""
     app.router.add_get("/api/vf-file-nodes/drives", handle_drives)
@@ -539,6 +572,7 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("/api/vf-file-nodes/list", handle_list)
     app.router.add_get("/api/vf-file-nodes/thumbnail", handle_thumbnail)
     app.router.add_get("/api/vf-file-nodes/view", handle_view)
+    app.router.add_get("/api/vf-file-nodes/comfy-parameters", handle_comfy_parameters)
     app.router.add_post("/api/vf-file-nodes/delete", handle_delete)
     app.router.add_post("/api/vf-file-nodes/open-in-explorer", handle_open_in_explorer)
     app.router.add_get("/api/vf-file-nodes/favorites", handle_get_favorites)

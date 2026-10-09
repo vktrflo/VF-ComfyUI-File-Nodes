@@ -1052,6 +1052,487 @@ class EmbeddedFileExplorer {
   }
 }
 
+function copyToClipboard(text, btn, successLabel = "Copied!") {
+  if (!text) return;
+  const doFeedback = () => {
+    if (btn) {
+      const orig = btn.innerHTML;
+      btn.innerHTML = `✓ ${successLabel}`;
+      setTimeout(() => {
+        btn.innerHTML = orig;
+      }, 1800);
+    }
+  };
+  if (navigator?.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(doFeedback).catch(() => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      doFeedback();
+    });
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+    doFeedback();
+  }
+}
+
+function buildSummaryText(params) {
+  const parts = [];
+  if (params.positive_prompt) {
+    parts.push(`Positive Prompt:\n${params.positive_prompt.trim()}\n`);
+  }
+  if (params.negative_prompt) {
+    parts.push(`Negative Prompt:\n${params.negative_prompt.trim()}\n`);
+  }
+  const settings = [];
+  if (params.steps != null) settings.push(`Steps: ${params.steps}`);
+  if (params.sampler != null) settings.push(`Sampler: ${params.sampler}`);
+  if (params.scheduler != null) settings.push(`Scheduler: ${params.scheduler}`);
+  if (params.cfg != null) settings.push(`CFG: ${params.cfg}`);
+  if (params.seed != null) settings.push(`Seed: ${params.seed}`);
+  if (params.denoise != null && params.denoise !== 1.0) settings.push(`Denoise: ${params.denoise}`);
+  if (params.models && params.models.length > 0) settings.push(`Model: ${params.models.join(", ")}`);
+  if (params.loras && params.loras.length > 0) {
+    const loraStrs = params.loras.map((l) => `${l.name} (${l.strength ?? 1.0})`);
+    settings.push(`LoRAs: ${loraStrs.join(", ")}`);
+  }
+  if (settings.length > 0) {
+    parts.push(settings.join(", "));
+  }
+  return parts.join("\n");
+}
+
+function setupParamsDrawer(drawerEl, params) {
+  drawerEl.innerHTML = "";
+
+  // Drawer Header
+  const header = createElement("div", "vf-params-drawer-header");
+  Object.assign(header.style, {
+    padding: "10px 14px",
+    background: "#1a1a24",
+    borderBottom: "1px solid #282836",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "8px",
+    flexShrink: "0",
+  });
+
+  const title = createElement("span", "", "⚙️ Parameters");
+  Object.assign(title.style, {
+    fontWeight: "600",
+    fontSize: "12px",
+    color: "#eee",
+  });
+  header.appendChild(title);
+
+  const actions = createElement("div");
+  Object.assign(actions.style, {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+  });
+
+  const copySummaryBtn = createElement("button", "", "📋 Copy All");
+  Object.assign(copySummaryBtn.style, {
+    background: "#252535",
+    border: "1px solid #3c3c4c",
+    borderRadius: "3px",
+    color: "#ccc",
+    fontSize: "10px",
+    padding: "3px 7px",
+    cursor: "pointer",
+    fontWeight: "500",
+  });
+  copySummaryBtn.onclick = () => copyToClipboard(buildSummaryText(params), copySummaryBtn);
+  actions.appendChild(copySummaryBtn);
+
+  if (params.has_workflow && params.workflow) {
+    const loadWfBtn = createElement("button", "", "📥 Load into Canvas");
+    Object.assign(loadWfBtn.style, {
+      background: "#0066cc",
+      border: "1px solid #0077ee",
+      borderRadius: "3px",
+      color: "#fff",
+      fontSize: "10px",
+      padding: "3px 7px",
+      cursor: "pointer",
+      fontWeight: "500",
+    });
+    loadWfBtn.onclick = () => {
+      try {
+        app.loadGraphData(params.workflow);
+        const orig = loadWfBtn.textContent;
+        loadWfBtn.textContent = "✓ Loaded!";
+        setTimeout(() => {
+          loadWfBtn.textContent = orig;
+        }, 2000);
+      } catch (err) {
+        console.error("[VF File Nodes] Failed to load workflow:", err);
+      }
+    };
+    actions.appendChild(loadWfBtn);
+  }
+
+  header.appendChild(actions);
+  drawerEl.appendChild(header);
+
+  // Drawer Body
+  const body = createElement("div", "vf-params-drawer-body");
+  Object.assign(body.style, {
+    flex: "1",
+    overflowY: "auto",
+    overflowX: "hidden",
+    padding: "12px 14px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+    boxSizing: "border-box",
+  });
+
+  // 1. Positive Prompt
+  if (params.positive_prompt) {
+    const section = createElement("div");
+    const labelRow = createElement("div");
+    Object.assign(labelRow.style, {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: "4px",
+    });
+    const label = createElement("span", "", "Positive Prompt");
+    Object.assign(label.style, {
+      fontSize: "11px",
+      fontWeight: "600",
+      color: "#66bb6a",
+    });
+    const copyBtn = createElement("button", "", "Copy");
+    Object.assign(copyBtn.style, {
+      background: "#252535",
+      border: "1px solid #3c3c4c",
+      borderRadius: "3px",
+      color: "#bbb",
+      fontSize: "10px",
+      padding: "1px 6px",
+      cursor: "pointer",
+    });
+    copyBtn.onclick = () => copyToClipboard(params.positive_prompt, copyBtn);
+    labelRow.appendChild(label);
+    labelRow.appendChild(copyBtn);
+
+    const textBox = createElement("div", "", params.positive_prompt);
+    Object.assign(textBox.style, {
+      background: "#0c0c14",
+      border: "1px solid #252535",
+      borderRadius: "4px",
+      padding: "8px 10px",
+      fontSize: "11px",
+      lineHeight: "1.4",
+      color: "#eee",
+      maxHeight: "130px",
+      overflowY: "auto",
+      userSelect: "text",
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word",
+    });
+    section.appendChild(labelRow);
+    section.appendChild(textBox);
+    body.appendChild(section);
+  }
+
+  // 2. Negative Prompt
+  if (params.negative_prompt) {
+    const section = createElement("div");
+    const labelRow = createElement("div");
+    Object.assign(labelRow.style, {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: "4px",
+    });
+    const label = createElement("span", "", "Negative Prompt");
+    Object.assign(label.style, {
+      fontSize: "11px",
+      fontWeight: "600",
+      color: "#ef5350",
+    });
+    const copyBtn = createElement("button", "", "Copy");
+    Object.assign(copyBtn.style, {
+      background: "#252535",
+      border: "1px solid #3c3c4c",
+      borderRadius: "3px",
+      color: "#bbb",
+      fontSize: "10px",
+      padding: "1px 6px",
+      cursor: "pointer",
+    });
+    copyBtn.onclick = () => copyToClipboard(params.negative_prompt, copyBtn);
+    labelRow.appendChild(label);
+    labelRow.appendChild(copyBtn);
+
+    const textBox = createElement("div", "", params.negative_prompt);
+    Object.assign(textBox.style, {
+      background: "#140e10",
+      border: "1px solid #381e22",
+      borderRadius: "4px",
+      padding: "8px 10px",
+      fontSize: "11px",
+      lineHeight: "1.4",
+      color: "#e0bbbb",
+      maxHeight: "90px",
+      overflowY: "auto",
+      userSelect: "text",
+      whiteSpace: "pre-wrap",
+      wordBreak: "break-word",
+    });
+    section.appendChild(labelRow);
+    section.appendChild(textBox);
+    body.appendChild(section);
+  }
+
+  // 3. Settings Grid
+  const gridItems = [];
+  if (params.seed != null) gridItems.push({ label: "Seed", value: String(params.seed), copyable: true });
+  if (params.steps != null) gridItems.push({ label: "Steps", value: String(params.steps) });
+  if (params.cfg != null) gridItems.push({ label: "CFG", value: String(params.cfg) });
+  if (params.sampler != null) gridItems.push({ label: "Sampler", value: String(params.sampler) });
+  if (params.scheduler != null) gridItems.push({ label: "Scheduler", value: String(params.scheduler) });
+  if (params.denoise != null) gridItems.push({ label: "Denoise", value: String(params.denoise) });
+
+  if (gridItems.length > 0) {
+    const gridEl = createElement("div");
+    Object.assign(gridEl.style, {
+      display: "grid",
+      gridTemplateColumns: "repeat(2, 1fr)",
+      gap: "6px",
+    });
+
+    gridItems.forEach((item) => {
+      const cell = createElement("div");
+      Object.assign(cell.style, {
+        background: "#181824",
+        border: "1px solid #282838",
+        borderRadius: "4px",
+        padding: "6px 8px",
+        display: "flex",
+        flexDirection: "column",
+        gap: "2px",
+        minWidth: "0",
+      });
+      const lblRow = createElement("div");
+      Object.assign(lblRow.style, {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+      });
+      const lbl = createElement("span", "", item.label);
+      Object.assign(lbl.style, {
+        fontSize: "9px",
+        fontWeight: "600",
+        textTransform: "uppercase",
+        letterSpacing: "0.5px",
+        color: "#888",
+      });
+      lblRow.appendChild(lbl);
+
+      if (item.copyable) {
+        const miniCopy = createElement("span", "", "📋");
+        miniCopy.title = "Copy Seed";
+        Object.assign(miniCopy.style, {
+          fontSize: "10px",
+          cursor: "pointer",
+          opacity: "0.6",
+        });
+        miniCopy.onmouseenter = () => { miniCopy.style.opacity = "1"; };
+        miniCopy.onmouseleave = () => { miniCopy.style.opacity = "0.6"; };
+        miniCopy.onclick = (e) => {
+          e.stopPropagation();
+          copyToClipboard(item.value, miniCopy, "✓");
+        };
+        lblRow.appendChild(miniCopy);
+      }
+
+      const val = createElement("span", "", item.value);
+      Object.assign(val.style, {
+        fontSize: "11px",
+        fontFamily: "monospace",
+        color: "#eee",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        userSelect: "text",
+      });
+      val.title = item.value;
+
+      cell.appendChild(lblRow);
+      cell.appendChild(val);
+      gridEl.appendChild(cell);
+    });
+    body.appendChild(gridEl);
+  }
+
+  // 4. Models
+  if (params.models && params.models.length > 0) {
+    const modelSection = createElement("div");
+    const mLabel = createElement("div", "", "Model");
+    Object.assign(mLabel.style, {
+      fontSize: "9px",
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: "0.5px",
+      color: "#888",
+      marginBottom: "4px",
+    });
+    modelSection.appendChild(mLabel);
+    params.models.forEach((m) => {
+      const pill = createElement("div", "", m);
+      Object.assign(pill.style, {
+        background: "#181824",
+        border: "1px solid #282838",
+        borderRadius: "4px",
+        padding: "4px 8px",
+        fontSize: "11px",
+        fontFamily: "monospace",
+        color: "#88ccff",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        marginBottom: "4px",
+        userSelect: "text",
+      });
+      pill.title = m;
+      modelSection.appendChild(pill);
+    });
+    body.appendChild(modelSection);
+  }
+
+  // 5. LoRAs
+  if (params.loras && params.loras.length > 0) {
+    const loraSection = createElement("div");
+    const lLabel = createElement("div", "", "LoRAs");
+    Object.assign(lLabel.style, {
+      fontSize: "9px",
+      fontWeight: "600",
+      textTransform: "uppercase",
+      letterSpacing: "0.5px",
+      color: "#888",
+      marginBottom: "4px",
+    });
+    loraSection.appendChild(lLabel);
+    params.loras.forEach((l) => {
+      const lRow = createElement("div");
+      Object.assign(lRow.style, {
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        background: "#181824",
+        border: "1px solid #282838",
+        borderRadius: "4px",
+        padding: "4px 8px",
+        marginBottom: "4px",
+        gap: "6px",
+      });
+      const lName = createElement("span", "", l.name);
+      Object.assign(lName.style, {
+        fontSize: "11px",
+        fontFamily: "monospace",
+        color: "#ffcc66",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        flex: "1",
+        userSelect: "text",
+      });
+      lName.title = l.name;
+      const lStrength = createElement("span", "", `${l.strength ?? 1.0}`);
+      Object.assign(lStrength.style, {
+        fontSize: "10px",
+        fontFamily: "monospace",
+        color: "#aaa",
+        background: "rgba(255,255,255,0.06)",
+        padding: "1px 5px",
+        borderRadius: "3px",
+        flexShrink: "0",
+      });
+      lRow.appendChild(lName);
+      lRow.appendChild(lStrength);
+      loraSection.appendChild(lRow);
+    });
+    body.appendChild(loraSection);
+  }
+
+  // 6. Raw Data (JSON)
+  const details = createElement("details");
+  Object.assign(details.style, {
+    border: "1px solid #282838",
+    borderRadius: "4px",
+    padding: "6px 8px",
+    background: "#101018",
+    marginTop: "2px",
+  });
+  const summary = createElement("summary", "", "Raw Data (JSON)");
+  Object.assign(summary.style, {
+    fontSize: "10px",
+    fontWeight: "600",
+    color: "#888",
+    cursor: "pointer",
+    outline: "none",
+    userSelect: "none",
+  });
+  details.appendChild(summary);
+
+  const jsonBtnRow = createElement("div");
+  Object.assign(jsonBtnRow.style, {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "6px",
+    marginTop: "8px",
+  });
+
+  if (params.workflow) {
+    const copyWfBtn = createElement("button", "", "Copy Workflow JSON");
+    Object.assign(copyWfBtn.style, {
+      background: "#20202e",
+      border: "1px solid #38384e",
+      borderRadius: "3px",
+      color: "#bbb",
+      fontSize: "10px",
+      padding: "3px 7px",
+      cursor: "pointer",
+    });
+    copyWfBtn.onclick = () => copyToClipboard(JSON.stringify(params.workflow, null, 2), copyWfBtn);
+    jsonBtnRow.appendChild(copyWfBtn);
+  }
+
+  if (params.prompt) {
+    const copyPrBtn = createElement("button", "", "Copy Prompt JSON");
+    Object.assign(copyPrBtn.style, {
+      background: "#20202e",
+      border: "1px solid #38384e",
+      borderRadius: "3px",
+      color: "#bbb",
+      fontSize: "10px",
+      padding: "3px 7px",
+      cursor: "pointer",
+    });
+    copyPrBtn.onclick = () => copyToClipboard(JSON.stringify(params.prompt, null, 2), copyPrBtn);
+    jsonBtnRow.appendChild(copyPrBtn);
+  }
+
+  details.appendChild(jsonBtnRow);
+  body.appendChild(details);
+
+  drawerEl.appendChild(body);
+}
+
 export function openPreviewModal(file) {
   let cleanupListeners = null;
     const { backdrop, close } = makeModalBackdrop({
@@ -1060,7 +1541,7 @@ export function openPreviewModal(file) {
     });
     const content = createElement("div");
     Object.assign(content.style, {
-      maxWidth: "90vw",
+      maxWidth: "94vw",
       maxHeight: "90vh",
       background: "#181820",
       borderRadius: "8px",
@@ -1114,6 +1595,31 @@ export function openPreviewModal(file) {
     });
     titleGroup.appendChild(metaRow);
 
+    const headerActions = createElement("div", "vf-modal-header-actions");
+    Object.assign(headerActions.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      flexShrink: "0",
+    });
+
+    const paramsBtn = createElement("button", "vf-modal-params-btn");
+    paramsBtn.innerHTML = `⚙️ Parameters`;
+    Object.assign(paramsBtn.style, {
+      background: "#282834",
+      border: "1px solid #3c3c4c",
+      borderRadius: "4px",
+      color: "#ccc",
+      fontSize: "11px",
+      fontWeight: "500",
+      padding: "4px 9px",
+      cursor: "pointer",
+      display: "none",
+      alignItems: "center",
+      gap: "5px",
+      transition: "all 0.15s ease",
+    });
+
     const closeBtn = createElement("button", "", "✕");
     Object.assign(closeBtn.style, {
       background: "none",
@@ -1128,8 +1634,11 @@ export function openPreviewModal(file) {
       cleanupListeners?.();
       close();
     };
+
+    headerActions.appendChild(paramsBtn);
+    headerActions.appendChild(closeBtn);
     header.appendChild(titleGroup);
-    header.appendChild(closeBtn);
+    header.appendChild(headerActions);
     content.appendChild(header);
 
     let currentDimensions = file.dimensions && Array.isArray(file.dimensions) ? file.dimensions : null;
@@ -1200,6 +1709,18 @@ export function openPreviewModal(file) {
     renderMeta();
 
     ensureSpinnerStyles();
+
+    const mainContainer = createElement("div", "vf-modal-main-container");
+    Object.assign(mainContainer.style, {
+      display: "flex",
+      flexDirection: "row",
+      flex: "1",
+      minHeight: "0",
+      minWidth: "0",
+      overflow: "hidden",
+      position: "relative",
+    });
+
     const body = createElement("div");
     Object.assign(body.style, {
       padding: "16px",
@@ -1209,7 +1730,46 @@ export function openPreviewModal(file) {
       minWidth: "320px",
       minHeight: "220px",
       position: "relative",
+      flex: "1",
+      overflow: "hidden",
     });
+
+    const paramsDrawer = createElement("div", "vf-modal-params-drawer");
+    Object.assign(paramsDrawer.style, {
+      width: "360px",
+      maxWidth: "45vw",
+      minWidth: "280px",
+      background: "#14141c",
+      borderLeft: "1px solid #2a2a38",
+      display: "none",
+      flexDirection: "column",
+      flexShrink: "0",
+      overflow: "hidden",
+      boxSizing: "border-box",
+    });
+
+    let currentParams = null;
+    let isParamsOpen = false;
+
+    paramsBtn.onclick = () => {
+      isParamsOpen = !isParamsOpen;
+      paramsDrawer.style.display = isParamsOpen ? "flex" : "none";
+      paramsBtn.style.background = isParamsOpen ? "#0066cc" : "#282834";
+      paramsBtn.style.color = isParamsOpen ? "#fff" : "#ccc";
+      paramsBtn.style.borderColor = isParamsOpen ? "#0077ee" : "#3c3c4c";
+    };
+
+    fetch(`/api/vf-file-nodes/comfy-parameters?path=${encodeURIComponent(file.path)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data || !data.has_parameters) return;
+        currentParams = data;
+        paramsBtn.style.display = "inline-flex";
+        setupParamsDrawer(paramsDrawer, data);
+      })
+      .catch((err) => {
+        console.debug("[VF File Nodes] ComfyUI parameters fetch error:", err);
+      });
 
     const spinner = createElement("div", "vf-modal-spinner");
     Object.assign(spinner.style, {
@@ -1248,7 +1808,7 @@ export function openPreviewModal(file) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        maxWidth: "85vw",
+        maxWidth: "100%",
         maxHeight: "75vh",
         borderRadius: "4px",
         opacity: "0",
@@ -1272,7 +1832,7 @@ export function openPreviewModal(file) {
         spinner.innerHTML = `<span style="font-size: 28px;">⚠️</span><span style="color: #e66; font-size: 12px;">Failed to load image preview</span>`;
       };
       Object.assign(img.style, {
-        maxWidth: "85vw",
+        maxWidth: "100%",
         maxHeight: "75vh",
         objectFit: "contain",
         transformOrigin: "center center",
@@ -1408,7 +1968,7 @@ export function openPreviewModal(file) {
       video.src = `/api/vf-file-nodes/view?path=${encodeURIComponent(file.path)}`;
       video.controls = true;
       video.autoplay = true;
-      video.style.maxWidth = "80vw";
+      video.style.maxWidth = "100%";
       video.style.maxHeight = "75vh";
       video.style.opacity = "0";
       video.style.transition = "opacity 0.15s ease-in";
@@ -1489,7 +2049,9 @@ export function openPreviewModal(file) {
       body.appendChild(pre);
     }
 
-    content.appendChild(body);
+    mainContainer.appendChild(body);
+    mainContainer.appendChild(paramsDrawer);
+    content.appendChild(mainContainer);
     backdrop.appendChild(content);
     document.body.appendChild(backdrop);
   }

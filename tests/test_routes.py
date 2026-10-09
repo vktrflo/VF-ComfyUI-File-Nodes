@@ -140,3 +140,95 @@ class TestFileNodesRoutes(AioHTTPTestCase):
             with Image.open(Path(tmpdir) / "test_thumb.jpg") as read_im:
                 assert read_im.size == (640, 480)
 
+    @unittest_run_loop
+    async def test_comfy_parameters(self):
+        import json
+        import tempfile
+        from PIL import Image
+        from PIL.PngImagePlugin import PngInfo
+
+        # 1. Missing path
+        resp = await self.client.get("/api/vf-file-nodes/comfy-parameters")
+        assert resp.status == 400
+        data = await resp.json()
+        assert data["has_parameters"] is False
+
+        # 2. Non-existent file
+        resp_nf = await self.client.get("/api/vf-file-nodes/comfy-parameters?path=nonexistent.png")
+        assert resp_nf.status == 200
+        data_nf = await resp_nf.json()
+        assert data_nf["has_parameters"] is False
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 3. File without parameters
+            plain_img = Path(tmpdir) / "plain.jpg"
+            Image.new("RGB", (32, 32), color="red").save(plain_img, "JPEG")
+            resp_plain = await self.client.get(f"/api/vf-file-nodes/comfy-parameters?path={plain_img}")
+            assert resp_plain.status == 200
+            data_plain = await resp_plain.json()
+            assert data_plain["has_parameters"] is False
+
+            # 4. File with embedded ComfyUI prompt & workflow
+            prompt_graph = {
+                "3": {
+                    "class_type": "KSampler",
+                    "inputs": {
+                        "seed": 123456789,
+                        "steps": 25,
+                        "cfg": 7.5,
+                        "sampler_name": "euler_ancestral",
+                        "scheduler": "karras",
+                        "denoise": 1.0,
+                        "model": ["4", 0],
+                        "positive": ["6", 0],
+                        "negative": ["7", 0],
+                    },
+                },
+                "4": {
+                    "class_type": "CheckpointLoaderSimple",
+                    "inputs": {
+                        "ckpt_name": "sd_xl_base_1.0.safetensors",
+                    },
+                },
+                "6": {
+                    "class_type": "CLIPTextEncode",
+                    "inputs": {
+                        "text": "a majestic lion in golden sunset",
+                    },
+                },
+                "7": {
+                    "class_type": "CLIPTextEncode",
+                    "inputs": {
+                        "text": "blurry, low quality",
+                    },
+                },
+            }
+            workflow_graph = {
+                "nodes": [{"id": 3, "type": "KSampler"}],
+                "extra": {},
+            }
+
+            info = PngInfo()
+            info.add_text("prompt", json.dumps(prompt_graph))
+            info.add_text("workflow", json.dumps(workflow_graph))
+
+            comfy_img = Path(tmpdir) / "comfy_gen.png"
+            Image.new("RGB", (64, 64), color="green").save(comfy_img, "PNG", pnginfo=info)
+
+            resp_comfy = await self.client.get(f"/api/vf-file-nodes/comfy-parameters?path={comfy_img}")
+            assert resp_comfy.status == 200
+            data_comfy = await resp_comfy.json()
+            assert data_comfy["has_parameters"] is True
+            assert data_comfy["seed"] == 123456789
+            assert data_comfy["steps"] == 25
+            assert data_comfy["cfg"] == 7.5
+            assert data_comfy["sampler"] == "euler_ancestral"
+            assert data_comfy["scheduler"] == "karras"
+            assert data_comfy["positive_prompt"] == "a majestic lion in golden sunset"
+            assert data_comfy["negative_prompt"] == "blurry, low quality"
+            assert data_comfy["models"] == ["sd_xl_base_1.0.safetensors"]
+            assert data_comfy["has_workflow"] is True
+            assert isinstance(data_comfy["workflow"], dict)
+            assert isinstance(data_comfy["prompt"], dict)
+
+
