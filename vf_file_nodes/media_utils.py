@@ -352,9 +352,18 @@ def decode_video_segment(
         video_out = None
         if has_comfy_video_api and InputImpl is not None and Types is not None:
             try:
+                # SaveVideo uses 4:2:0 encoding, which requires even dimensions.
+                # Pad only VIDEO components; keep the image outputs and crop exact.
+                video_frames = tensor_frames
+                if final_w % 2 or final_h % 2:
+                    video_frames = F.pad(
+                        tensor_frames.permute(0, 3, 1, 2),
+                        (0, final_w % 2, 0, final_h % 2),
+                        mode="replicate",
+                    ).permute(0, 2, 3, 1).contiguous()
                 video_out = InputImpl.VideoFromComponents(
                     Types.VideoComponents(
-                        images=tensor_frames,
+                        images=video_frames,
                         audio=audio_dict,
                         frame_rate=Fraction(int(round(video_fps * 1000)), 1000),
                     ),
