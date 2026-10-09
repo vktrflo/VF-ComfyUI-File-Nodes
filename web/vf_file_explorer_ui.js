@@ -6,6 +6,7 @@ import { api } from "../../scripts/api.js";
 import { app } from "../../scripts/app.js";
 import { clearDragPayload, setupDragPayload } from "./vf_canvas_drop.js";
 import {
+  checkIsLocalClient,
   createElement,
   createEmptyMessageEl,
   ensureSpinnerStyles,
@@ -13,6 +14,7 @@ import {
   formatDuration,
   getEmptyFolderMessage,
   icon,
+  isLikelyLocalHost,
   isSupportedMediaFile,
   makeModalBackdrop,
 } from "./vf_ui_shared.js";
@@ -717,6 +719,12 @@ class EmbeddedFileExplorer {
       padding: "4px 8px",
       fontSize: "11px",
       cursor: "pointer",
+    });
+    if (!isLikelyLocalHost()) {
+      revealBtn.style.display = "none";
+    }
+    checkIsLocalClient().then((isLocal) => {
+      revealBtn.style.display = isLocal ? "" : "none";
     });
     revealBtn.onclick = () => {
       api.fetchApi("/api/vf-file-nodes/open-in-explorer", {

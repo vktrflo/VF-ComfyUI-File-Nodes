@@ -231,4 +231,34 @@ class TestFileNodesRoutes(AioHTTPTestCase):
             assert isinstance(data_comfy["workflow"], dict)
             assert isinstance(data_comfy["prompt"], dict)
 
+    @unittest_run_loop
+    async def test_is_local_endpoint(self):
+        # Default loopback test client should be recognized as local
+        resp = await self.client.get("/api/vf-file-nodes/is-local")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["is_local"] is True
+
+        # Remote IP forwarded header should be recognized as not local
+        resp_remote = await self.client.get(
+            "/api/vf-file-nodes/is-local",
+            headers={"x-forwarded-for": "198.51.100.5"},
+        )
+        assert resp_remote.status == 200
+        data_remote = await resp_remote.json()
+        assert data_remote["is_local"] is False
+
+    @unittest_run_loop
+    async def test_open_in_explorer_remote_forbidden(self):
+        resp = await self.client.post(
+            "/api/vf-file-nodes/open-in-explorer",
+            json={"path": str(Path(__file__).resolve())},
+            headers={"x-forwarded-for": "198.51.100.5"},
+        )
+        assert resp.status == 403
+        data = await resp.json()
+        assert data["success"] is False
+        assert "only supported from the local machine" in data["error"]
+
+
 

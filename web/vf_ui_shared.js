@@ -2,6 +2,8 @@
  * Shared UI primitives and SVG icons for VF ComfyUI File Nodes.
  */
 
+import { api } from "../../scripts/api.js";
+
 export function createElement(tag, className = "", text = "") {
   const el = document.createElement(tag);
   if (className) el.className = className;
@@ -231,3 +233,30 @@ export function createEmptyMessageEl(emptyInfo) {
   `;
   return emptyEl;
 }
+
+export function isLikelyLocalHost() {
+  const host = (typeof window !== "undefined" && window.location?.hostname) || "";
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+}
+
+let _isLocalPromise = null;
+
+export function checkIsLocalClient() {
+  if (!_isLocalPromise) {
+    _isLocalPromise = (async () => {
+      try {
+        if (api && typeof api.fetchApi === "function") {
+          const resp = await api.fetchApi("/api/vf-file-nodes/is-local");
+          if (resp.ok) {
+            const data = await resp.json();
+            return Boolean(data.is_local);
+          }
+        }
+      } catch (e) {}
+
+      return isLikelyLocalHost();
+    })();
+  }
+  return _isLocalPromise;
+}
+

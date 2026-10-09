@@ -5,12 +5,14 @@
 import { api } from "../../scripts/api.js";
 import { openPreviewModal } from "./vf_file_explorer_ui.js";
 import {
+  checkIsLocalClient,
   createElement,
   createEmptyMessageEl,
   formatDateTime,
   formatDuration,
   getEmptyFolderMessage,
   icon,
+  isLikelyLocalHost,
   isSupportedMediaFile,
   makeModalBackdrop,
 } from "./vf_ui_shared.js";
@@ -624,6 +626,12 @@ export class VFFileBrowserModal {
       padding: "6px 12px",
       cursor: "pointer",
       fontSize: "12px",
+    });
+    if (!isLikelyLocalHost()) {
+      explorerBtn.style.display = "none";
+    }
+    checkIsLocalClient().then((isLocal) => {
+      explorerBtn.style.display = isLocal ? "" : "none";
     });
     explorerBtn.onclick = () => {
       api.fetchApi("/api/vf-file-nodes/open-in-explorer", {

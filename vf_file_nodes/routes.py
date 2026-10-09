@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import ipaddress
 import os
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +52,58 @@ _COMFY_PARAMS_CACHE: dict[str, tuple[float, int, dict[str, Any]]] = {}
 MAX_PARAMS_CACHE_SIZE = 1000
 
 _DISK_CACHE_DIR: Path | None = None
+_LOCAL_IPS_CACHE: set[str] = set()
+_LOCAL_IPS_CACHE_TIME: float = 0.0
+
+
+def get_local_ip_set() -> set[str]:
+    """Return all IP addresses corresponding to local network interfaces on this machine."""
+    global _LOCAL_IPS_CACHE, _LOCAL_IPS_CACHE_TIME
+    now = time.time()
+    if _LOCAL_IPS_CACHE and (now - _LOCAL_IPS_CACHE_TIME) < 60.0:
+        return _LOCAL_IPS_CACHE
+
+    local_ips = {"127.0.0.1", "::1", "localhost"}
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            local_ips.add(ip)
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            local_ips.add(info[4][0])
+    except Exception:
+        pass
+
+    _LOCAL_IPS_CACHE = local_ips
+    _LOCAL_IPS_CACHE_TIME = now
+    return local_ips
+
+
+def is_local_request(request: web.Request) -> bool:
+    """Determine if an incoming HTTP request originated from the same machine."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.headers.get("x-real-ip") or request.remote or ""
+
+    if not client_ip:
+        return False
+
+    local_ips = get_local_ip_set()
+    if client_ip in local_ips:
+        return True
+
+    try:
+        ip = ipaddress.ip_address(client_ip)
+        if ip.is_loopback or (getattr(ip, "ipv4_mapped", None) and ip.ipv4_mapped.is_loopback):
+            return True
+    except ValueError:
+        pass
+
+    return False
 
 
 def _get_disk_cache_dir() -> Path:
@@ -173,8 +228,13 @@ async def handle_drives(request: web.Request) -> web.Response:
     return web.json_response({"drives": drives})
 
 
+async def handle_is_local(request: web.Request) -> web.Response:
+    """Return whether the current client is accessing from the same machine."""
+    return web.json_response({"is_local": is_local_request(request)})
+
+
 async def handle_start(request: web.Request) -> web.Response:
-    """Return default start directory."""
+    """Return default start directory and local client status."""
     start_path = ""
     if folder_paths is not None:
         try:
@@ -184,7 +244,10 @@ async def handle_start(request: web.Request) -> web.Response:
     if not start_path or not os.path.exists(start_path):
         drives = get_available_drives()
         start_path = drives[0]["path"] if drives else os.path.expanduser("~")
-    return web.json_response({"path": start_path})
+    return web.json_response({
+        "path": start_path,
+        "is_local": is_local_request(request),
+    })
 
 
 async def handle_resolve(request: web.Request) -> web.Response:
@@ -419,6 +482,12 @@ async def handle_delete(request: web.Request) -> web.Response:
 
 async def handle_open_in_explorer(request: web.Request) -> web.Response:
     """Reveal a file or folder in the system file manager."""
+    if not is_local_request(request):
+        return web.json_response(
+            {"success": False, "error": "Opening file explorer is only supported from the local machine"},
+            status=403,
+        )
+
     data = {}
     if request.can_read_body:
         try:
@@ -566,6 +635,7 @@ async def handle_comfy_parameters(request: web.Request) -> web.Response:
 
 def setup_routes(app: web.Application) -> None:
     """Register all routes on an aiohttp application."""
+    app.router.add_get("/api/vf-file-nodes/is-local", handle_is_local)
     app.router.add_get("/api/vf-file-nodes/drives", handle_drives)
     app.router.add_get("/api/vf-file-nodes/start", handle_start)
     app.router.add_get("/api/vf-file-nodes/resolve", handle_resolve)
