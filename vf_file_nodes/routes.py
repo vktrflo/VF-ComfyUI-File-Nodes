@@ -352,7 +352,7 @@ async def handle_list(request: web.Request) -> web.Response:
 
                         if include:
                             st = entry.stat()
-                            meta = get_media_metadata(entry.path, media_type, st)
+                            meta = await asyncio.to_thread(get_media_metadata, entry.path, media_type, st)
                             files.append({
                                 "name": entry.name,
                                 "path": entry.path,

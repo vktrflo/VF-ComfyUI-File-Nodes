@@ -8,11 +8,55 @@ import { createElement, ensureSpinnerStyles } from "./vf_ui_shared.js";
 const DEFAULT_WIDTH = 260;
 const DEFAULT_HEIGHT = 340;
 
+function cleanupCanvasPreview(node) {
+  if (node.widgets) {
+    const idx = node.widgets.findIndex((w) => w.name === "$$canvas-image-preview");
+    if (idx !== -1) {
+      node.widgets[idx].onRemove?.();
+      node.widgets.splice(idx, 1);
+      if (typeof node.computeSize === "function" && typeof node.setSize === "function") {
+        const sz = node.computeSize();
+        node.setSize([
+          Math.max(node.size?.[0] || DEFAULT_WIDTH, DEFAULT_WIDTH),
+          Math.max(sz?.[1] || DEFAULT_HEIGHT, DEFAULT_HEIGHT),
+        ]);
+      }
+      node.setDirtyCanvas(true, true);
+    }
+  }
+}
+
 export function setupLoadImageNode(nodeType, nodeData) {
+  // Prevent ComfyUI from injecting $$canvas-image-preview since VFLoadImage has its own DOM preview widget
+  const origAddCustomWidget = nodeType.prototype.addCustomWidget;
+  nodeType.prototype.addCustomWidget = function (customWidget) {
+    if (customWidget?.name === "$$canvas-image-preview") {
+      return null;
+    }
+    return origAddCustomWidget ? origAddCustomWidget.apply(this, arguments) : null;
+  };
+
+  // Suppress ComfyUI's default updatePreviews injection on canvas draw
+  nodeType.prototype.onDrawBackground = function (ctx) {
+    cleanupCanvasPreview(this);
+  };
+
   const origOnNodeCreated = nodeType.prototype.onNodeCreated;
   nodeType.prototype.onNodeCreated = function () {
     const res = origOnNodeCreated ? origOnNodeCreated.apply(this, arguments) : undefined;
     const node = this;
+
+    cleanupCanvasPreview(node);
+
+    const instanceAddCustomWidget = node.addCustomWidget;
+    if (instanceAddCustomWidget) {
+      node.addCustomWidget = function (customWidget) {
+        if (customWidget?.name === "$$canvas-image-preview") {
+          return null;
+        }
+        return instanceAddCustomWidget.apply(this, arguments);
+      };
+    }
 
     // MaskEditor and image preview compatibility properties
     node.previewMediaType = "image";
@@ -160,6 +204,7 @@ export function setupLoadImageNode(nodeType, nodeData) {
 
           imgEl.style.display = "block";
           imgEl.onload = () => {
+            cleanupCanvasPreview(node);
             node.imgs = [imgEl];
             node.imageIndex = 0;
             node.previewMediaType = "image";
@@ -269,6 +314,7 @@ export function setupLoadImageNode(nodeType, nodeData) {
   const origOnConfigure = nodeType.prototype.onConfigure;
   nodeType.prototype.onConfigure = function () {
     const res = origOnConfigure ? origOnConfigure.apply(this, arguments) : undefined;
+    cleanupCanvasPreview(this);
     this.previewMediaType = "image";
     this.imageIndex = 0;
     if (Array.isArray(this.size)) {
