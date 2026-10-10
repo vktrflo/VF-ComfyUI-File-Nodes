@@ -171,10 +171,17 @@ def resize_mask_by_longest_side(mask: torch.Tensor, longest_side: int) -> torch.
     return x.squeeze(1)
 
 
-def load_image(path: str, longest_size: int = 0) -> tuple[torch.Tensor, torch.Tensor, int, int]:
+def load_image(
+    path: str,
+    longest_size: int = 0,
+    crop: tuple[int, int, int, int] = (0, 0, 0, 0),
+    longest_side: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, int, int]:
     """Load an image file and return (image_tensor, mask_tensor, width, height)."""
     if not path or not os.path.isfile(path):
         return empty_image_tensor(), empty_mask_tensor(), 512, 512
+
+    target_longest = longest_side if longest_side is not None else longest_size
 
     try:
         with Image.open(path) as img:
@@ -198,9 +205,19 @@ def load_image(path: str, longest_size: int = 0) -> tuple[torch.Tensor, torch.Te
             image_tensor = torch.from_numpy(rgb_np).unsqueeze(0)
             mask_tensor = torch.from_numpy(mask_np).unsqueeze(0)
 
-            if longest_size > 0:
-                image_tensor = resize_tensor_by_longest_side(image_tensor, longest_size)
-                mask_tensor = resize_mask_by_longest_side(mask_tensor, longest_size)
+            # Apply crop if valid
+            crop_x, crop_y, crop_w, crop_h = crop
+            if crop_w > 0 and crop_h > 0:
+                cx = max(0, min(crop_x, orig_w - 1))
+                cy = max(0, min(crop_y, orig_h - 1))
+                cw = min(crop_w, orig_w - cx)
+                ch = min(crop_h, orig_h - cy)
+                image_tensor = image_tensor[:, cy : cy + ch, cx : cx + cw, :]
+                mask_tensor = mask_tensor[:, cy : cy + ch, cx : cx + cw]
+
+            if target_longest > 0:
+                image_tensor = resize_tensor_by_longest_side(image_tensor, target_longest)
+                mask_tensor = resize_mask_by_longest_side(mask_tensor, target_longest)
 
             final_h = int(image_tensor.shape[1])
             final_w = int(image_tensor.shape[2])

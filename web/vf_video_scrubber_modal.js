@@ -66,6 +66,33 @@ export function setupLoadVideoNode(nodeType) {
         };
       }
       this._vfRefreshVideo = () => { hideScrubberWidgets(this); player.update(readState(this)); };
+      this._vfRecalculateDimensions = (isVueNodes) => {
+        this._vfRefreshVideo?.();
+        this._vfVideoScrubber?.updateLayout();
+        const vue = typeof isVueNodes === "boolean"
+          ? isVueNodes
+          : Boolean(
+              window.LiteGraph?.vueNodesMode ||
+              this._vfVideoScrubber?.root?.closest?.("[data-node-id]") ||
+              this._vfVideoScrubber?.root?.closest?.(".lg-node")
+            );
+        if (!vue) {
+          const minH = this._vfVideoScrubber?.minHeight || PANEL_HEIGHT;
+          const baseLegacyHeight = Math.max(440, minH + 80);
+          const targetWidth = Math.max(this.size?.[0] || MIN_WIDTH, MIN_WIDTH);
+          const targetHeight = this._vfLegacyHeight
+            ? Math.max(this._vfLegacyHeight, baseLegacyHeight)
+            : baseLegacyHeight;
+          if (typeof this.setSize === "function") {
+            this.setSize([targetWidth, targetHeight]);
+          } else if (Array.isArray(this.size)) {
+            this.size[0] = targetWidth;
+            this.size[1] = targetHeight;
+          }
+          this._vfVideoScrubber?.syncCropBoxToVideo();
+        }
+        this.setDirtyCanvas?.(true, true);
+      };
       this._vfRefreshVideo();
       const height = Math.max(this.size?.[1] || 0, this.computeSize?.()[1] || 440);
       this.setSize?.([Math.max(this.size?.[0] || 0, MIN_WIDTH), height]);
@@ -87,6 +114,14 @@ export function setupLoadVideoNode(nodeType) {
   const originalResize = nodeType.prototype.onResize;
   nodeType.prototype.onResize = function () {
     const result = originalResize?.apply(this, arguments);
+    const isVue = Boolean(
+      window.LiteGraph?.vueNodesMode ||
+      this._vfVideoScrubber?.root?.closest?.("[data-node-id]") ||
+      this._vfVideoScrubber?.root?.closest?.(".lg-node")
+    );
+    if (!isVue && Array.isArray(this.size) && this.size[1] > 0) {
+      this._vfLegacyHeight = this.size[1];
+    }
     if (this.size) this.size[0] = Math.max(this.size[0], MIN_WIDTH);
     this._vfRefreshVideo?.();
     this._vfVideoScrubber?.updateLayout();

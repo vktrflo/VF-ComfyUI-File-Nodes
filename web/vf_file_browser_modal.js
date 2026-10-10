@@ -252,6 +252,11 @@ export class VFFileBrowserModal {
     if (this.previewBtn) {
       this.previewBtn.style.display = isSupported ? "inline-block" : "none";
     }
+    if (this.explorerBtn) {
+      this.explorerBtn.title = file
+        ? `Open "${file.name}" in system file explorer`
+        : "Open current folder in system file explorer";
+    }
     if (file) {
       this.selectedLabel.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
     } else {
@@ -618,6 +623,8 @@ export class VFFileBrowserModal {
     actions.style.gap = "8px";
 
     const explorerBtn = createElement("button", "", "Open in Explorer");
+    explorerBtn.title = "Open current folder or selected file in system file explorer";
+    this.explorerBtn = explorerBtn;
     Object.assign(explorerBtn.style, {
       background: "#2a2a36",
       color: "#ccc",
