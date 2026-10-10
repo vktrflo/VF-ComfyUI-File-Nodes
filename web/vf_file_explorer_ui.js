@@ -147,6 +147,7 @@ export function setupFileExplorerNode(nodeType, nodeData) {
       updateWidgetDimensions();
 
       const explorer = new EmbeddedFileExplorer(node, pathWidget, widgetContainer);
+      node._vfExplorer = explorer;
       const domWidget = node.addDOMWidget("embedded_file_explorer", "explorer", widgetContainer, {
         serialize: false,
         hideOnZoom: false,
@@ -1125,6 +1126,13 @@ class EmbeddedFileExplorer {
         if (file.ctime) tipParts.push(`Created: ${new Date(file.ctime * 1000).toLocaleString()}`);
         if (file.dimensions) tipParts.push(`Dimensions: ${file.dimensions[0]}×${file.dimensions[1]}`);
         if (file.duration) tipParts.push(`Duration: ${formatDuration(file.duration)}`);
+        if (file.size) tipParts.push(`Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+        tipParts.push("");
+        tipParts.push("Drag and drop this file onto the canvas to create a loader node.");
+        card.title = tipParts.join("\n");
+      } else {
+        const tipParts = [`Name: ${file.name}`];
+        if (file.ctime) tipParts.push(`Created: ${new Date(file.ctime * 1000).toLocaleString()}`);
         if (file.size) tipParts.push(`Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
         card.title = tipParts.join("\n");
       }

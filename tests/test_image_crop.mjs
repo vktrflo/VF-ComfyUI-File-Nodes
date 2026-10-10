@@ -282,3 +282,95 @@ test('VFFileExplorer Explorer button has descriptive tooltip', () => {
   assert.ok(explorerBtn.title, 'Explorer button should have a tooltip');
   assert.match(explorerBtn.title, /system file explorer/i);
 });
+
+test('draggable file cards in VFFileExplorer include drag and drop canvas verbiage in tooltip', () => {
+  const context = vm.createContext({
+    window: new Element('window'),
+    document: { createElement: tag => new Element(tag), body: new Element('body') },
+    createElement: (tag, cls, text) => Object.assign(new Element(tag), { textContent: text }),
+    ensureSpinnerStyles() {},
+    api: { fetchApi: async () => ({ ok: true, json: async () => ({}) }) },
+    checkIsLocalClient: async () => true,
+    isLikelyLocalHost: () => true,
+    isSupportedMediaFile: (f) => f && (f.media_type === 'image' || f.media_type === 'video' || f.media_type === 'audio'),
+    makeModalBackdrop: () => ({ backdrop: new Element('backdrop'), close() {} }),
+    getEmptyFolderMessage: () => ({}),
+    createEmptyMessageEl: () => new Element('div'),
+    icon: () => '',
+    formatDateTime: () => '',
+    formatDuration: () => '',
+    clearDragPayload() {},
+    setupDragPayload() {},
+    setTimeout: fn => { fn(); return 1; },
+    clearTimeout() {},
+  });
+
+  const source = readFileSync(new URL('../web/vf_file_explorer_ui.js', import.meta.url), 'utf8')
+    .replace(/import\s*\{[\s\S]*?\}\s*from\s*['"][^'"]+['"];?/g, '')
+    .replace(/import\s+[^;\r\n]+;?/g, '')
+    .replace(/export /g, '');
+  vm.runInContext(source + '\n globalThis.exports = { setupFileExplorerNode };', context);
+
+  class Node {
+    constructor() {
+      this.size = [640, 680];
+      this.widgets = [{ name: 'file_path', value: '', type: 'text' }];
+    }
+    addDOMWidget(name, type, el, options) {
+      this.domWidget = { name, el, options };
+      return this.domWidget;
+    }
+    setDirtyCanvas() {}
+    setSize(s) { this.size = s; }
+  }
+
+  context.exports.setupFileExplorerNode(Node, {});
+  const node = new Node();
+  node.onNodeCreated();
+
+  const explorer = node._vfExplorer;
+  assert.ok(explorer, 'node._vfExplorer should be set');
+
+  const supportedFile = {
+    name: 'test_render.png',
+    path: '/path/to/test_render.png',
+    media_type: 'image',
+    size: 1048576,
+  };
+  const unsupportedFile = {
+    name: 'document.pdf',
+    path: '/path/to/document.pdf',
+    media_type: 'other',
+    size: 2048,
+  };
+
+  explorer.files = [supportedFile, unsupportedFile];
+  explorer.dirs = [];
+  explorer.renderGrid();
+
+  const cards = [];
+  function collectCards(el) {
+    if (el.tag === 'div' && el.draggable !== undefined) cards.push(el);
+    el.children?.forEach(collectCards);
+  }
+  collectCards(explorer.fileGridEl);
+
+  const supportedCard = cards.find(c => c.draggable === true);
+  const unsupportedCard = cards.find(c => c.draggable === false);
+
+  assert.ok(supportedCard, 'Draggable card should exist for supported media file');
+  assert.ok(supportedCard.title, 'Supported card should have title');
+  assert.match(
+    supportedCard.title,
+    /drag and drop this file onto the canvas to create a loader node/i,
+    'Draggable file card tooltip should include proper drag and drop canvas verbiage'
+  );
+
+  assert.ok(unsupportedCard, 'Unsupported card should exist');
+  assert.doesNotMatch(
+    unsupportedCard.title || '',
+    /drag and drop/i,
+    'Non-draggable file should not have drag and drop canvas verbiage'
+  );
+});
+
