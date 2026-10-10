@@ -32,10 +32,146 @@ function stopCanvasEvents(el) {
   el.addEventListener("wheel", stop, { passive: false });
 }
 
+let sharedFileTooltipEl = null;
+
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getSharedFileTooltip() {
+  if (!sharedFileTooltipEl && typeof document !== "undefined" && document.createElement) {
+    sharedFileTooltipEl = document.createElement("div");
+    sharedFileTooltipEl.className = "vf-file-card-custom-tooltip";
+    Object.assign(sharedFileTooltipEl.style, {
+      position: "fixed",
+      zIndex: "100000",
+      pointerEvents: "none",
+      display: "none",
+      opacity: "0",
+      transition: "opacity 0.1s ease-out",
+      background: "#181822",
+      border: "1px solid #36364a",
+      borderRadius: "8px",
+      padding: "10px 12px",
+      boxShadow: "0 8px 24px rgba(0, 0, 0, 0.65), 0 2px 6px rgba(0, 0, 0, 0.4)",
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+      fontSize: "11px",
+      color: "#ccc",
+      maxWidth: "280px",
+      lineHeight: "1.4",
+      backdropFilter: "blur(8px)",
+      boxSizing: "border-box",
+    });
+    if (document.body && typeof document.body.appendChild === "function") {
+      document.body.appendChild(sharedFileTooltipEl);
+    }
+  }
+  return sharedFileTooltipEl;
+}
+
+function positionFileCardTooltip(clientX, clientY) {
+  if (!sharedFileTooltipEl || sharedFileTooltipEl.style.display === "none") return;
+  const tip = sharedFileTooltipEl;
+  const offset = 14;
+  const width = tip.offsetWidth || 260;
+  const height = tip.offsetHeight || 120;
+  const winWidth = (typeof window !== "undefined" && window.innerWidth) || 1920;
+  const winHeight = (typeof window !== "undefined" && window.innerHeight) || 1080;
+
+  let left = (clientX || 0) + offset;
+  let top = (clientY || 0) + offset;
+
+  if (left + width > winWidth - 10) {
+    left = Math.max(10, (clientX || 0) - width - offset);
+  }
+  if (top + height > winHeight - 10) {
+    top = Math.max(10, (clientY || 0) - height - offset);
+  }
+
+  tip.style.left = `${Math.round(left)}px`;
+  tip.style.top = `${Math.round(top)}px`;
+}
+
+function showFileCardTooltip(card, file, isSupported, clientX, clientY) {
+  const tip = getSharedFileTooltip();
+  if (!tip) return;
+
+  const metaItems = [];
+  if (file.ctime) {
+    metaItems.push(`<div><span style="color: #888;">Created:</span> <span style="color: #bbb;">${new Date(file.ctime * 1000).toLocaleString()}</span></div>`);
+  }
+  if (isSupported) {
+    if (file.dimensions && Array.isArray(file.dimensions)) {
+      metaItems.push(`<div><span style="color: #888;">Dimensions:</span> <span style="color: #bbb;">${file.dimensions[0]}×${file.dimensions[1]}</span></div>`);
+    }
+    if (file.duration) {
+      metaItems.push(`<div><span style="color: #888;">Duration:</span> <span style="color: #bbb;">${formatDuration(file.duration)}</span></div>`);
+    }
+  }
+  if (file.size) {
+    metaItems.push(`<div><span style="color: #888;">Size:</span> <span style="color: #bbb;">${(file.size / 1024 / 1024).toFixed(2)} MB</span></div>`);
+  }
+
+  let instructionHtml = "";
+  if (isSupported) {
+    instructionHtml = `
+      <div class="vf-tooltip-instruction" style="
+        margin-top: 8px;
+        padding: 7px 9px;
+        background: rgba(0, 136, 255, 0.14);
+        border: 1px solid rgba(0, 136, 255, 0.42);
+        border-radius: 6px;
+        display: flex;
+        align-items: flex-start;
+        gap: 7px;
+      ">
+        <span style="font-size: 13px; line-height: 1.2; flex-shrink: 0;">💡</span>
+        <div style="display: flex; flex-direction: column; gap: 2px;">
+          <span style="font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #60b5ff;">Drag &amp; Drop</span>
+          <span style="font-size: 11px; font-weight: 500; color: #d6e8ff; line-height: 1.35;">Drag and drop this file onto the canvas to create a loader node.</span>
+        </div>
+      </div>
+    `;
+  }
+
+  tip.innerHTML = `
+    <div style="font-weight: 600; font-size: 12px; color: #fff; margin-bottom: 6px; word-break: break-all; line-height: 1.3;">
+      ${escapeHtml(file.name)}
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 3px; font-size: 10.5px;">
+      ${metaItems.join("")}
+    </div>
+    ${instructionHtml}
+  `;
+
+  tip.style.display = "block";
+  tip.style.opacity = "1";
+  positionFileCardTooltip(clientX, clientY);
+}
+
+function hideFileCardTooltip() {
+  if (sharedFileTooltipEl) {
+    sharedFileTooltipEl.style.display = "none";
+    sharedFileTooltipEl.style.opacity = "0";
+  }
+}
+
 export function setupFileExplorerNode(nodeType, nodeData) {
   const origOnNodeCreated = nodeType.prototype.onNodeCreated;
   const origOnResize = nodeType.prototype.onResize;
   const origOnConfigure = nodeType.prototype.onConfigure;
+  const origOnRemoved = nodeType.prototype.onRemoved;
+
+  nodeType.prototype.onRemoved = function () {
+    hideFileCardTooltip();
+    return origOnRemoved ? origOnRemoved.apply(this, arguments) : undefined;
+  };
 
   nodeType.prototype.onResize = function (size) {
     const res = origOnResize ? origOnResize.apply(this, arguments) : undefined;
@@ -414,6 +550,7 @@ class EmbeddedFileExplorer {
   }
 
   async loadDirectory(dirPath) {
+    hideFileCardTooltip();
     this.currentPath = dirPath;
     this.pathLabel.textContent = dirPath;
     this.updateFavoriteButton();
@@ -698,6 +835,8 @@ class EmbeddedFileExplorer {
       scrollbarWidth: "thin",
       scrollbarColor: "#555 #14141a",
     });
+    this.fileGridEl.addEventListener("scroll", () => hideFileCardTooltip(), { passive: true });
+    this.container.addEventListener("scroll", () => hideFileCardTooltip(), { passive: true });
     this.container.appendChild(this.fileGridEl);
 
     if (typeof ResizeObserver !== "undefined") {
@@ -830,6 +969,7 @@ class EmbeddedFileExplorer {
   }
 
   renderGrid() {
+    hideFileCardTooltip();
     this.fileGridEl.innerHTML = "";
     const isMosaic = this.layoutMode === "mosaic";
 
@@ -996,10 +1136,12 @@ class EmbeddedFileExplorer {
       });
 
       card.ondragstart = (e) => {
+        hideFileCardTooltip();
         card.style.opacity = "0.5";
         setupDragPayload(e, file);
       };
       card.ondragend = () => {
+        hideFileCardTooltip();
         card.style.opacity = "1";
         clearDragPayload();
       };
@@ -1128,7 +1270,10 @@ class EmbeddedFileExplorer {
         if (file.duration) tipParts.push(`Duration: ${formatDuration(file.duration)}`);
         if (file.size) tipParts.push(`Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
         tipParts.push("");
+        tipParts.push("────────────────────────────────────────");
+        tipParts.push("💡 DRAG & DROP:");
         tipParts.push("Drag and drop this file onto the canvas to create a loader node.");
+        tipParts.push("────────────────────────────────────────");
         card.title = tipParts.join("\n");
       } else {
         const tipParts = [`Name: ${file.name}`];
@@ -1137,7 +1282,26 @@ class EmbeddedFileExplorer {
         card.title = tipParts.join("\n");
       }
 
+      card.addEventListener("mouseenter", (e) => {
+        card._vfSavedTitle = card.title;
+        card.title = "";
+        showFileCardTooltip(card, file, isSupported, e?.clientX, e?.clientY);
+      });
+      card.addEventListener("mousemove", (e) => {
+        positionFileCardTooltip(e?.clientX, e?.clientY);
+      });
+      card.addEventListener("mouseleave", () => {
+        if (card._vfSavedTitle !== undefined) {
+          card.title = card._vfSavedTitle;
+        }
+        hideFileCardTooltip();
+      });
+      card.addEventListener("mousedown", () => {
+        hideFileCardTooltip();
+      });
+
       card.onclick = () => {
+        hideFileCardTooltip();
         this.fileGridEl.querySelectorAll(".vf-card-file").forEach((c) => {
           c.style.borderColor = "#2d2d3c";
           c.style.background = "#1f1f28";
@@ -1148,6 +1312,7 @@ class EmbeddedFileExplorer {
       };
 
       card.ondblclick = () => {
+        hideFileCardTooltip();
         this.openPreviewModal(file);
       };
 

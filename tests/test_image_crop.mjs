@@ -372,5 +372,28 @@ test('draggable file cards in VFFileExplorer include drag and drop canvas verbia
     /drag and drop/i,
     'Non-draggable file should not have drag and drop canvas verbiage'
   );
+
+  // Test custom styled HTML tooltip on hover
+  assert.ok(supportedCard.listeners.get('mouseenter'), 'mouseenter listener should be registered');
+  supportedCard.listeners.get('mouseenter')({ clientX: 120, clientY: 150 });
+
+  const tooltipEl = context.document.body.children.find(c => c.className === 'vf-file-card-custom-tooltip');
+  assert.ok(tooltipEl, 'Custom tooltip element should be appended to body');
+  assert.equal(tooltipEl.style.display, 'block', 'Tooltip should be visible');
+  assert.match(tooltipEl.innerHTML, /vf-tooltip-instruction/, 'Tooltip should have highlighted instruction box');
+  assert.match(tooltipEl.innerHTML, /💡/, 'Tooltip instruction should include indicator icon');
+  assert.match(tooltipEl.innerHTML, /Drag &amp; Drop|Drag & Drop/, 'Tooltip instruction should have Drag & Drop header');
+  assert.match(tooltipEl.innerHTML, /Drag and drop this file onto the canvas to create a loader node\./, 'Tooltip should display instruction text');
+
+  // Hovering mouseleave should hide tooltip and restore title
+  supportedCard.listeners.get('mouseleave')();
+  assert.equal(tooltipEl.style.display, 'none', 'Tooltip should hide on mouseleave');
+  assert.match(supportedCard.title, /drag and drop this file onto the canvas to create a loader node/i, 'Title should be restored on mouseleave');
+
+  // Unsupported file card should not have instruction box in tooltip
+  unsupportedCard.listeners.get('mouseenter')({ clientX: 120, clientY: 150 });
+  assert.doesNotMatch(tooltipEl.innerHTML, /vf-tooltip-instruction/, 'Unsupported file tooltip should not have instruction box');
+  unsupportedCard.listeners.get('mouseleave')();
 });
+
 
