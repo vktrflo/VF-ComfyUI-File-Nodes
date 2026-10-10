@@ -17,8 +17,6 @@ def deploy() -> None:
     print(f"  Source: {SOURCE_DIR}")
     print(f"  Target: {TARGET_DIR}")
 
-    if TARGET_DIR.exists():
-        shutil.rmtree(TARGET_DIR)
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
 
     for item in SOURCE_DIR.iterdir():
@@ -26,7 +24,7 @@ def deploy() -> None:
             continue
         dest = TARGET_DIR / item.name
         if item.is_dir():
-            shutil.copytree(item, dest, ignore=IGNORE_PATTERNS)
+            shutil.copytree(item, dest, ignore=IGNORE_PATTERNS, dirs_exist_ok=True)
         else:
             shutil.copy2(item, dest)
 
