@@ -153,6 +153,11 @@ def get_media_metadata(file_path: str, media_type: str, st: os.stat_result) -> d
                 stream = next((s for s in container.streams if s.type == "video"), None)
                 if stream:
                     meta["dimensions"] = [stream.width, stream.height]
+                    rate = getattr(stream, "average_rate", None) or getattr(stream, "base_rate", None) or getattr(stream, "guessed_rate", None)
+                    if rate:
+                        fps = float(rate)
+                        if fps > 0:
+                            meta["fps"] = int(fps) if fps.is_integer() else round(fps, 2)
                 if container.duration is not None and av.time_base:
                     meta["duration"] = round(float(container.duration) / av.time_base, 2)
                 elif stream and stream.duration is not None and stream.time_base:
@@ -363,6 +368,7 @@ async def handle_list(request: web.Request) -> web.Response:
                                 "media_type": media_type,
                                 "dimensions": meta.get("dimensions"),
                                 "duration": meta.get("duration"),
+                                "fps": meta.get("fps"),
                             })
                 except (PermissionError, OSError):
                     continue
@@ -646,12 +652,66 @@ async def handle_comfy_parameters(request: web.Request) -> web.Response:
     return web.json_response(res)
 
 
+async def handle_metadata(request: web.Request) -> web.Response:
+    """Return metadata (dimensions, duration, fps) for a media file."""
+    raw_path = str(request.query.get("path", "")).strip()
+    if not raw_path:
+        return web.json_response({"success": False, "error": "Path required"}, status=400)
+
+    resolved = resolve_file_path(raw_path)
+    if not resolved or not os.path.isfile(resolved):
+        candidates = [Path(raw_path)]
+        normalized = raw_path.replace("\\", "/").strip("/")
+        lower = normalized.lower()
+        if folder_paths is not None:
+            try:
+                in_dir = folder_paths.get_input_directory()
+                out_dir = folder_paths.get_output_directory()
+                if in_dir and lower.startswith("input/"):
+                    candidates.append(Path(in_dir) / normalized[6:].lstrip("/"))
+                elif out_dir and lower.startswith("output/"):
+                    candidates.append(Path(out_dir) / normalized[7:].lstrip("/"))
+                else:
+                    if in_dir:
+                        candidates.append(Path(in_dir) / normalized)
+                    if out_dir:
+                        candidates.append(Path(out_dir) / normalized)
+            except Exception:
+                pass
+        for cand in candidates:
+            try:
+                if cand.is_file():
+                    resolved = str(cand)
+                    break
+            except (OSError, ValueError):
+                continue
+
+    if not resolved or not os.path.isfile(resolved):
+        return web.json_response({"success": False, "error": "File not found"}, status=404)
+
+    media_type = classify_media_type(resolved)
+    try:
+        st = os.stat(resolved)
+        meta = await asyncio.to_thread(get_media_metadata, resolved, media_type, st)
+        return web.json_response({
+            "success": True,
+            "path": resolved,
+            "media_type": media_type,
+            "dimensions": meta.get("dimensions"),
+            "duration": meta.get("duration"),
+            "fps": meta.get("fps"),
+        })
+    except Exception as exc:
+        return web.json_response({"success": False, "error": str(exc)}, status=500)
+
+
 def setup_routes(app: web.Application) -> None:
     """Register all routes on an aiohttp application."""
     app.router.add_get("/api/vf-file-nodes/is-local", handle_is_local)
     app.router.add_get("/api/vf-file-nodes/drives", handle_drives)
     app.router.add_get("/api/vf-file-nodes/start", handle_start)
     app.router.add_get("/api/vf-file-nodes/resolve", handle_resolve)
+    app.router.add_get("/api/vf-file-nodes/metadata", handle_metadata)
     app.router.add_get("/api/vf-file-nodes/list", handle_list)
     app.router.add_get("/api/vf-file-nodes/thumbnail", handle_thumbnail)
     app.router.add_get("/api/vf-file-nodes/view", handle_view)

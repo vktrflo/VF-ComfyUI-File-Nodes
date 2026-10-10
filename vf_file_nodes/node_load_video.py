@@ -16,8 +16,8 @@ class VFLoadVideo:
 
     CATEGORY = "VF/File Loaders"
     FUNCTION = "load_video"
-    RETURN_TYPES = ("IMAGE", "IMAGE", "AUDIO", "VIDEO", "DICT", "INT", "INT", "STRING")
-    RETURN_NAMES = ("image", "single_frame", "audio", "video", "frame_info", "width", "height", "path")
+    RETURN_TYPES = ("IMAGE", "IMAGE", "AUDIO", "FLOAT", "INT", "INT", "INT", "STRING")
+    RETURN_NAMES = ("images", "first_frame", "audio", "fps", "image_count", "width", "height", "path")
 
     @classmethod
     def INPUT_TYPES(cls) -> dict[str, dict[str, tuple[str, dict[str, Any]]]]:
@@ -60,26 +60,16 @@ class VFLoadVideo:
         crop_y: int = 0,
         crop_width: int = 0,
         crop_height: int = 0,
-    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], Any, dict[str, Any], int, int, str]:
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, Any], float, int, int, int, str]:
         path_str = str(video_path or "").strip()
         if not path_str or not os.path.isfile(path_str):
             empty_img = empty_image_tensor()
-            empty_info = {
-                "fps": fps,
-                "total_frames": 0,
-                "current_frame_idx": 0,
-                "segment_start_frame": 0,
-                "segment_end_frame": 0,
-                "video_path": path_str,
-                "width": 512,
-                "height": 512,
-            }
             return (
                 empty_img,
                 empty_img,
                 empty_audio_dict(),
-                None,
-                empty_info,
+                float(fps),
+                0,
                 512,
                 512,
                 path_str,
@@ -98,12 +88,18 @@ class VFLoadVideo:
             crop=crop,
         )
 
+        images = result["image"]
+        first_frame = images[0:1] if images.shape[0] > 0 else result.get("single_frame", images)
+        video_fps = float(result.get("frame_info", {}).get("fps", fps) or fps)
+        is_empty = result.get("frame_info", {}).get("segment_end_frame", 0) == 0
+        image_count = 0 if is_empty else int(images.shape[0])
+
         return (
-            result["image"],
-            result["single_frame"],
+            images,
+            first_frame,
             result["audio"],
-            result["video"],
-            result["frame_info"],
+            video_fps,
+            image_count,
             result["width"],
             result["height"],
             resolved,

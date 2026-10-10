@@ -109,8 +109,20 @@ def test_vf_load_image_execution(tmp_path, monkeypatch):
     assert path_ann == str(clip_file.resolve())
 
 def test_vf_load_video_contract():
-    assert VFLoadVideo.RETURN_TYPES == ("IMAGE", "IMAGE", "AUDIO", "VIDEO", "DICT", "INT", "INT", "STRING")
-    assert VFLoadVideo.RETURN_NAMES == ("image", "single_frame", "audio", "video", "frame_info", "width", "height", "path")
+    assert VFLoadVideo.RETURN_TYPES == ("IMAGE", "IMAGE", "AUDIO", "FLOAT", "INT", "INT", "INT", "STRING")
+    assert VFLoadVideo.RETURN_NAMES == ("images", "first_frame", "audio", "fps", "image_count", "width", "height", "path")
+
+def test_vf_load_video_empty_path():
+    node = VFLoadVideo()
+    images, first_frame, audio, fps, image_count, width, height, path = node.load_video("", fps=30.0)
+    assert images.shape == (1, 512, 512, 3)
+    assert first_frame.shape == (1, 512, 512, 3)
+    assert "waveform" in audio
+    assert fps == 30.0
+    assert image_count == 0
+    assert width == 512
+    assert height == 512
+    assert path == ""
 
 def test_vf_load_audio_contract():
     assert VFLoadAudio.RETURN_TYPES == ("AUDIO", "STRING", "FLOAT", "INT")

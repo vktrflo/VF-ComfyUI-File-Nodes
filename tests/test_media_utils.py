@@ -113,3 +113,77 @@ def test_resolve_file_path(tmp_path):
 
     # 3. Non-existent unannotated path returns as-is
     assert resolve_file_path("nonexistent.png") == "nonexistent.png"
+
+
+def test_decode_video_segment_progress_reporting(tmp_path, monkeypatch):
+    av = pytest.importorskip("av")
+    import numpy as np
+
+    source = tmp_path / "progress_test.mp4"
+    total_encoded_frames = 5
+    with av.open(str(source), "w") as container:
+        stream = container.add_stream("libx264", rate=24)
+        stream.width, stream.height = 64, 64
+        stream.pix_fmt = "yuv420p"
+        for _ in range(total_encoded_frames):
+            pixels = np.zeros((64, 64, 3), dtype=np.uint8)
+            frame = av.VideoFrame.from_ndarray(pixels, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+
+    tqdm_updates = []
+    tqdm_instances = []
+
+    class DummyTqdm:
+        def __init__(self, total=None, desc=None, unit=None, leave=True, **kwargs):
+            self.total = total
+            self.desc = desc
+            self.unit = unit
+            self.n = 0
+            tqdm_instances.append(self)
+
+        def update(self, n=1):
+            self.n += n
+            tqdm_updates.append(n)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    pbar_updates = []
+    pbar_instances = []
+
+    class DummyProgressBar:
+        def __init__(self, total=None):
+            self.total = total
+            self.current = 0
+            pbar_instances.append(self)
+
+        def update(self, n=1):
+            self.current += n
+            pbar_updates.append(n)
+
+    interrupted_calls = []
+
+    def mock_throw_interrupted():
+        interrupted_calls.append(True)
+
+    monkeypatch.setattr(media_utils, "tqdm", DummyTqdm)
+    monkeypatch.setattr(media_utils, "ProgressBar", DummyProgressBar)
+    monkeypatch.setattr(media_utils, "throw_exception_if_processing_interrupted", mock_throw_interrupted)
+
+    res = media_utils.decode_video_segment(str(source), start_time=0.0, segment_duration=0.2, fps=24.0)
+
+    assert len(tqdm_instances) == 1, "tqdm console progress bar should be instantiated"
+    assert tqdm_instances[0].total == len(res["image"]), "tqdm total should match decoded frames"
+    assert sum(tqdm_updates) == len(res["image"]), "tqdm should receive update for each decoded frame"
+
+    assert len(pbar_instances) == 1, "ComfyUI ProgressBar should be instantiated"
+    assert sum(pbar_updates) == len(res["image"]), "ProgressBar should receive update for each frame"
+
+    assert len(interrupted_calls) >= len(res["image"]), "Should check for interruption during decode"
+

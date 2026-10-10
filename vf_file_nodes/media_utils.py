@@ -12,12 +12,32 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn.functional as F
+from contextlib import nullcontext
 from PIL import Image, ImageOps
 
 try:
     import av
 except ImportError:
     av = None
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
+try:
+    import comfy.utils
+    ProgressBar = comfy.utils.ProgressBar
+except (ImportError, AttributeError):
+    ProgressBar = None
+
+try:
+    import comfy.model_management
+    throw_exception_if_processing_interrupted = (
+        comfy.model_management.throw_exception_if_processing_interrupted
+    )
+except (ImportError, AttributeError):
+    throw_exception_if_processing_interrupted = None
 
 try:
     from comfy_api.latest import InputImpl, Types
@@ -306,18 +326,38 @@ def decode_video_segment(
             seek_pts = int(start_time / time_base)
             container.seek(seek_pts, stream=stream, backward=True)
 
+        filename = Path(video_path).name
+        pbar_ui = ProgressBar(num_frames) if ProgressBar is not None else None
+        pbar_console = (
+            tqdm(total=num_frames, desc=f"VF Load Video ({filename})", unit="frames", leave=True)
+            if tqdm is not None
+            else None
+        )
+        console_ctx = pbar_console if pbar_console is not None else nullcontext()
+
         frames = []
-        for frame in container.decode(stream):
-            curr_time = float(frame.pts * time_base) if frame.pts is not None else (len(frames) / video_fps)
-            if curr_time < (start_time - 0.05):
-                continue
+        try:
+            with console_ctx:
+                for frame in container.decode(stream):
+                    if throw_exception_if_processing_interrupted is not None:
+                        throw_exception_if_processing_interrupted()
 
-            rgb = frame.to_ndarray(format="rgb24")
-            frames.append(rgb)
-            if len(frames) >= num_frames:
-                break
+                    curr_time = float(frame.pts * time_base) if frame.pts is not None else (len(frames) / video_fps)
+                    if curr_time < (start_time - 0.05):
+                        continue
 
-        container.close()
+                    rgb = frame.to_ndarray(format="rgb24")
+                    frames.append(rgb)
+
+                    if pbar_console is not None:
+                        pbar_console.update(1)
+                    if pbar_ui is not None:
+                        pbar_ui.update(1)
+
+                    if len(frames) >= num_frames:
+                        break
+        finally:
+            container.close()
 
         if not frames:
             return empty_res
