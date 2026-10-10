@@ -17,7 +17,7 @@ from .media_utils import (
 
 
 class VFLoadImage:
-    """Dedicated image loader with longest_size downscaling and preview."""
+    """Dedicated image loader with longest_side downscaling, visual crop, and preview."""
 
     CATEGORY = "VF/File Loaders"
     FUNCTION = "load"
@@ -29,28 +29,55 @@ class VFLoadImage:
         return {
             "required": {
                 "image_path": ("STRING", {"default": ""}),
-                "longest_size": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
+                "longest_side": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
+                "crop_x": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
+                "crop_y": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
+                "crop_width": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
+                "crop_height": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
             },
         }
 
     @classmethod
-    def IS_CHANGED(cls, image_path: str, longest_size: int = 0) -> str:
+    def IS_CHANGED(
+        cls,
+        image_path: str,
+        longest_side: int = 0,
+        crop_x: int = 0,
+        crop_y: int = 0,
+        crop_width: int = 0,
+        crop_height: int = 0,
+        **kwargs: Any,
+    ) -> str:
         resolved = resolve_file_path(image_path)
         if resolved and os.path.isfile(resolved):
             try:
                 mtime = os.path.getmtime(resolved)
-                return f"{mtime}:{longest_size}"
+                side = kwargs.get("longest_size", longest_side)
+                return f"{mtime}:{side}:{crop_x}:{crop_y}:{crop_width}:{crop_height}"
             except OSError:
                 pass
         return ""
 
     def load(
-        self, image_path: str, longest_size: int = 0
+        self,
+        image_path: str,
+        longest_side: int = 0,
+        crop_x: int = 0,
+        crop_y: int = 0,
+        crop_width: int = 0,
+        crop_height: int = 0,
+        **kwargs: Any,
     ) -> tuple[torch.Tensor, torch.Tensor, str, int, int]:
         resolved = resolve_file_path(image_path)
         if not resolved or not os.path.isfile(resolved):
             return empty_image_tensor(), empty_mask_tensor(), str(image_path or ""), 512, 512
 
         resolved_abs = str(Path(resolved).resolve())
-        image, mask, width, height = load_image(resolved_abs, longest_size=longest_size)
+        target_longest = kwargs.get("longest_size", longest_side)
+        crop = (crop_x, crop_y, crop_width, crop_height)
+        image, mask, width, height = load_image(
+            resolved_abs,
+            longest_side=target_longest,
+            crop=crop,
+        )
         return (image, mask, resolved_abs, width, height)

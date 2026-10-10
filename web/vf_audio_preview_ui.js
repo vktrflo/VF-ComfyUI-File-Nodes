@@ -137,6 +137,29 @@ export function setupLoadAudioNode(nodeType, nodeData) {
           });
         }
 
+        node._vfRecalculateDimensions = (isVueNodes) => {
+          const vue = typeof isVueNodes === "boolean"
+            ? isVueNodes
+            : Boolean(
+                window.LiteGraph?.vueNodesMode ||
+                container.closest?.("[data-node-id]") ||
+                container.closest?.(".lg-node")
+              );
+          if (!vue) {
+            const targetWidth = Math.max(node.size?.[0] || DEFAULT_WIDTH, DEFAULT_WIDTH);
+            const targetHeight = node._vfLegacyHeight
+              ? Math.max(node._vfLegacyHeight, DEFAULT_HEIGHT)
+              : DEFAULT_HEIGHT;
+            if (typeof node.setSize === "function") {
+              node.setSize([targetWidth, targetHeight]);
+            } else if (Array.isArray(node.size)) {
+              node.size[0] = targetWidth;
+              node.size[1] = targetHeight;
+            }
+          }
+          node.setDirtyCanvas?.(true, true);
+        };
+
         if (Array.isArray(node.size) && node.size[1] < DEFAULT_HEIGHT) {
           if (typeof node.setSize === "function") {
             node.setSize([Math.max(node.size[0], DEFAULT_WIDTH), DEFAULT_HEIGHT]);
@@ -168,6 +191,14 @@ export function setupLoadAudioNode(nodeType, nodeData) {
   const origOnResize = nodeType.prototype.onResize;
   nodeType.prototype.onResize = function (size) {
     const res = origOnResize ? origOnResize.apply(this, arguments) : undefined;
+    const isVue = Boolean(
+      window.LiteGraph?.vueNodesMode ||
+      this.widgets?.[0]?.element?.closest?.("[data-node-id]") ||
+      this.widgets?.[0]?.element?.closest?.(".lg-node")
+    );
+    if (!isVue && Array.isArray(this.size) && this.size[1] > 0) {
+      this._vfLegacyHeight = this.size[1];
+    }
     return res;
   };
 }

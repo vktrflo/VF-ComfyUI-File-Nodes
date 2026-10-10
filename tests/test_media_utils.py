@@ -100,6 +100,35 @@ def test_load_image(tmp_path):
     assert rw == 50
     assert resized_img.shape == (1, 100, 50, 3)
 
+
+def test_load_image_crop_and_longest_side(tmp_path):
+    img_path = tmp_path / "crop_test.png"
+    im = Image.new("RGBA", (200, 100), color=(0, 255, 0, 128))
+    im.save(img_path)
+
+    # 1. Crop only (no resize)
+    crop = (20, 10, 80, 50)
+    cropped_img, cropped_mask, w, h = load_image(str(img_path), crop=crop, longest_side=0)
+    assert w == 80
+    assert h == 50
+    assert cropped_img.shape == (1, 50, 80, 3)
+    assert cropped_mask.shape == (1, 50, 80)
+
+    # 2. Crop + longest_side downscale (longest of 80, 50 is 80 -> downscaled to 40)
+    res_img, res_mask, rw, rh = load_image(str(img_path), crop=crop, longest_side=40)
+    assert rw == 40
+    assert rh == 25
+    assert res_img.shape == (1, 25, 40, 3)
+    assert res_mask.shape == (1, 25, 40)
+
+    # 3. Crop clamping to image boundaries
+    clamped_img, clamped_mask, cw, ch = load_image(str(img_path), crop=(150, 80, 100, 100))
+    # 200 - 150 = 50 width, 100 - 80 = 20 height
+    assert cw == 50
+    assert ch == 20
+    assert clamped_img.shape == (1, 20, 50, 3)
+
+
 def test_resolve_file_path(tmp_path):
     from vf_file_nodes.media_utils import resolve_file_path
 

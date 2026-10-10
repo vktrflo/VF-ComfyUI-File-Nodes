@@ -39,6 +39,14 @@ export function setupFileExplorerNode(nodeType, nodeData) {
 
   nodeType.prototype.onResize = function (size) {
     const res = origOnResize ? origOnResize.apply(this, arguments) : undefined;
+    const isVue = Boolean(
+      window.LiteGraph?.vueNodesMode ||
+      this.widgets?.[0]?.element?.closest?.("[data-node-id]") ||
+      this.widgets?.[0]?.element?.closest?.(".lg-node")
+    );
+    if (!isVue && Array.isArray(this.size) && this.size[1] > 0) {
+      this._vfLegacyHeight = this.size[1];
+    }
     this._vfUpdateWidgetDimensions?.();
     return res;
   };
@@ -113,6 +121,29 @@ export function setupFileExplorerNode(nodeType, nodeData) {
         }
       };
       node._vfUpdateWidgetDimensions = updateWidgetDimensions;
+      node._vfRecalculateDimensions = (isVueNodes) => {
+        updateWidgetDimensions();
+        const vue = typeof isVueNodes === "boolean"
+          ? isVueNodes
+          : Boolean(
+              window.LiteGraph?.vueNodesMode ||
+              widgetContainer.closest?.("[data-node-id]") ||
+              widgetContainer.closest?.(".lg-node")
+            );
+        if (!vue) {
+          const targetWidth = Math.max(node.size?.[0] || DEFAULT_WIDTH, DEFAULT_WIDTH);
+          const targetHeight = node._vfLegacyHeight
+            ? Math.max(node._vfLegacyHeight, DEFAULT_HEIGHT)
+            : DEFAULT_HEIGHT;
+          if (typeof node.setSize === "function") {
+            node.setSize([targetWidth, targetHeight]);
+          } else if (Array.isArray(node.size)) {
+            node.size[0] = targetWidth;
+            node.size[1] = targetHeight;
+          }
+        }
+        node.setDirtyCanvas?.(true, true);
+      };
       updateWidgetDimensions();
 
       const explorer = new EmbeddedFileExplorer(node, pathWidget, widgetContainer);
@@ -711,6 +742,8 @@ class EmbeddedFileExplorer {
     btnGroup.style.gap = "6px";
 
     const revealBtn = createElement("button", "", "Explorer");
+    revealBtn.title = "Open current folder or selected file in system file explorer";
+    this.revealBtn = revealBtn;
     Object.assign(revealBtn.style, {
       background: "#282834",
       color: "#bbb",
@@ -733,6 +766,7 @@ class EmbeddedFileExplorer {
         body: JSON.stringify({ path: this.selectedFile ? this.selectedFile.path : this.currentPath }),
       });
     };
+
 
     this.delBtn = createElement("button", "", "Delete");
     Object.assign(this.delBtn.style, {
@@ -1128,6 +1162,11 @@ class EmbeddedFileExplorer {
     const isSupported = isSupportedMediaFile(file);
     if (this.delBtn) {
       this.delBtn.style.display = isSupported ? "inline-block" : "none";
+    }
+    if (this.revealBtn) {
+      this.revealBtn.title = file
+        ? `Open "${file.name}" in system file explorer`
+        : "Open current folder in system file explorer";
     }
     if (file) {
       this.statusText.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;

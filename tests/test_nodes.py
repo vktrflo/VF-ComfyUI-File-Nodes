@@ -58,8 +58,17 @@ def test_vf_unpack_media_safety():
     assert audio2["sample_rate"] == 44100 # safe non-crash fallback
 
 def test_vf_load_image_contract():
+    inputs = VFLoadImage.INPUT_TYPES()
+    required = inputs["required"]
+    assert "image_path" in required
+    assert "longest_side" in required
+    assert "crop_x" in required
+    assert "crop_y" in required
+    assert "crop_width" in required
+    assert "crop_height" in required
     assert VFLoadImage.RETURN_TYPES == ("IMAGE", "MASK", "STRING", "INT", "INT")
     assert VFLoadImage.RETURN_NAMES == ("image", "mask", "path", "width", "height")
+
 
 def test_vf_load_image_execution(tmp_path, monkeypatch):
     from PIL import Image
@@ -86,9 +95,22 @@ def test_vf_load_image_execution(tmp_path, monkeypatch):
 
     # IS_CHANGED
     change_sig = VFLoadImage.IS_CHANGED(str(test_img))
-    assert change_sig.endswith(":0")
+    assert ":0:0:0:0:0" in change_sig or change_sig.endswith(":0")
+
+    # Crop and longest_side
+    img_c, mask_c, path_c, w_c, h_c = node.load(
+        str(test_img), longest_side=30, crop_x=10, crop_y=10, crop_width=60, crop_height=40
+    )
+    assert w_c == 30 and h_c == 20
+    assert img_c.shape == (1, 20, 30, 3)
+    assert mask_c.shape == (1, 20, 30)
+
+    # Backward compatibility with longest_size
+    img_legacy, mask_legacy, _, w_leg, h_leg = node.load(str(test_img), longest_size=60)
+    assert w_leg == 60 and h_leg == 40
 
     # 3. ComfyUI annotated filepath simulation (clipspace mask)
+
     clip_file = tmp_path / "clipspace-mask-123.png"
     im.save(clip_file)
 
