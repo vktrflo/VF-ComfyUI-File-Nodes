@@ -220,9 +220,10 @@ export class VFImageCropper {
 
     const leftControls = styled("div", {
       display: "inline-flex",
-      alignItems: "center",
+      alignItems: "flex-end",
       gap: "8px",
     });
+    this.leftControls = leftControls;
 
     const button = (text) =>
       styled(

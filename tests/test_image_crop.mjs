@@ -107,6 +107,7 @@ test('image crop controls and resize input are created in preview container', ()
   assert.ok(cropper.cropToggleBtn, 'Crop toggle button should exist');
   assert.ok(cropper.advancedInputs?.longest_side, 'Resize to input should exist');
   assert.equal(cropper.cropToggleBtn.textContent, 'Enable Crop');
+  assert.equal(cropper.leftControls?.style.alignItems, 'flex-end', 'Controls row should vertically align controls to flex-end');
 });
 
 test('toggling crop updates crop_x, crop_y, crop_width, crop_height on node widgets', () => {
